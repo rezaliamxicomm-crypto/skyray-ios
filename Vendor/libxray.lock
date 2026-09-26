@@ -1,0 +1,4 @@
+# libXray release pinned for SkyRay iOS (scripts/fetch-libxray.sh verifies the zip against this)
+tag=v26.9.9
+asset=libxray-apple-cgo.zip
+sha256=84a11f0923efb65be7631b3c4cac75bd4351fc13b9cc2394def6af5c1696e9fa

@@ -1,0 +1,79 @@
+# XcodeGen project definition: `xcodegen generate` writes SkyRay.xcodeproj (not committed).
+name: SkyRay
+options:
+  bundleIdPrefix: com.allion
+  deploymentTarget:
+    iOS: "15.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+settings:
+  base:
+    MARKETING_VERSION: "1.1.5"            # CI passes VERSION on the command line; keep in step by hand
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.10"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    GENERATE_INFOPLIST_FILE: "NO"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_BITCODE: "NO"
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+packages:
+  SkyRayCore:
+    path: Packages/SkyRayCore
+  SkyRayXray:
+    path: Packages/SkyRayXray
+targets:
+  SkyRay:
+    type: application
+    platform: iOS
+    sources:
+      - path: SkyRay
+    dependencies:
+      - package: SkyRayCore
+      - package: SkyRayXray
+      - target: SkyRayTunnel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.allion.skyray
+        PRODUCT_NAME: SkyRay
+        INFOPLIST_FILE: Config/SkyRay/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/SkyRay/SkyRay.entitlements
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "SkyRay AppStore"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: "NO"
+  SkyRayTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SkyRayTunnel
+      - path: Vendor/geo/geoip-lite.dat
+        buildPhase: resources
+      - path: Vendor/geo/geosite-lite.dat
+        buildPhase: resources
+    dependencies:
+      - package: SkyRayCore
+      - package: SkyRayXray
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.allion.skyray.tunnel
+        PRODUCT_NAME: SkyRayTunnel
+        INFOPLIST_FILE: Config/SkyRayTunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/SkyRayTunnel/SkyRayTunnel.entitlements
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "SkyRay Tunnel AppStore"
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        SKIP_INSTALL: "YES"
+schemes:
+  SkyRay:
+    build:
+      targets:
+        SkyRay: all
+        SkyRayTunnel: all
+    run:
+      config: Debug
+    archive:
+      config: Release

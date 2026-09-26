@@ -1,0 +1,139 @@
+name: iOS
+
+# Every push builds the app (unit tests, then a compile of both targets — unsigned until the signing secrets
+# exist, a signed App Store archive once they do). A tag vX.Y.Z, equal to VERSION, also uploads the archive
+# to TestFlight with the App Store Connect API key.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "upload this build to TestFlight"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      HAS_SIGNING: ${{ secrets.IOS_DIST_P12_BASE64 != '' && secrets.IOS_PROFILE_APP_BASE64 != '' && secrets.IOS_PROFILE_TUNNEL_BASE64 != '' && secrets.APPLE_TEAM_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          brew install xcodegen
+          xcodegen --version
+
+      - name: LibXray (pinned release, sha256 verified)
+        run: scripts/fetch-libxray.sh
+
+      - name: Version numbers
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d ' \n' < VERSION)
+          echo "MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          case "$GITHUB_REF" in
+            refs/tags/v*) [ "${GITHUB_REF#refs/tags/v}" = "$VERSION" ] || { echo "tag ${GITHUB_REF#refs/tags/} != VERSION $VERSION"; exit 1; } ;;
+          esac
+          echo "version $VERSION build $((100 + GITHUB_RUN_NUMBER))"
+
+      - name: Unit tests (SkyRayCore, pure Swift)
+        run: swift test --package-path Packages/SkyRayCore 2>&1 | tail -40
+
+      - name: Generate the project
+        run: xcodegen generate
+
+      - name: Signing (certificate and profiles from the secrets)
+        if: env.HAS_SIGNING == 'true'
+        env:
+          P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          PROFILE_APP: ${{ secrets.IOS_PROFILE_APP_BASE64 }}
+          PROFILE_TUNNEL: ${{ secrets.IOS_PROFILE_TUNNEL_BASE64 }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/skyray.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          for name in APP TUNNEL; do
+            var="PROFILE_$name"; f="$RUNNER_TEMP/$name.mobileprovision"
+            printf '%s' "${!var}" | base64 --decode > "$f"
+            uuid=$(security cms -D -i "$f" | plutil -extract UUID raw -o - -)
+            for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+              mkdir -p "$dir"; cp "$f" "$dir/$uuid.mobileprovision"
+            done
+            echo "profile $name: $uuid ($(security cms -D -i "$f" | plutil -extract Name raw -o - -))"
+          done
+
+      - name: Compile (unsigned) — no signing secrets yet
+        if: env.HAS_SIGNING != 'true'
+        run: |
+          set -o pipefail
+          xcodebuild -project SkyRay.xcodeproj -scheme SkyRay -configuration Release -destination 'generic/platform=iOS' \
+            MARKETING_VERSION="$MARKETING_VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" \
+            build 2>&1 | tee build.log | grep -E "error:|warning: .*(deprecated|unused)|BUILD (SUCCEEDED|FAILED)|\*\* " || true
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Archive (signed, App Store)
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -o pipefail
+          xcodebuild -project SkyRay.xcodeproj -scheme SkyRay -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath build/SkyRay.xcarchive archive \
+            MARKETING_VERSION="$MARKETING_VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            2>&1 | tee build.log | grep -E "error:|warning: .*sign|ARCHIVE (SUCCEEDED|FAILED)|\*\* " || true
+          grep -q "ARCHIVE SUCCEEDED" build.log
+          sed "s/TEAM_ID_PLACEHOLDER/${{ secrets.APPLE_TEAM_ID }}/" ci/ExportOptions.plist > build/ExportOptions.plist
+          xcodebuild -exportArchive -archivePath build/SkyRay.xcarchive -exportOptionsPlist build/ExportOptions.plist -exportPath build/export 2>&1 | tail -20
+          ls -la build/export
+
+      - name: Build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: IPA and symbols
+        if: env.HAS_SIGNING == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyRay-${{ env.MARKETING_VERSION }}-${{ env.BUILD_NUMBER }}
+          path: |
+            build/export/*.ipa
+            build/SkyRay.xcarchive/dSYMs
+
+      - name: Upload to TestFlight
+        if: env.HAS_SIGNING == 'true' && (startsWith(github.ref, 'refs/tags/v') || inputs.upload == true)
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          key = os.environ["ASC_PRIVATE_KEY"].replace("\\n", "\n")
+          json.dump({"key_id": os.environ["ASC_KEY_ID"], "issuer_id": os.environ["ASC_ISSUER_ID"], "key": key, "in_house": False},
+                    open(os.path.join(os.environ["RUNNER_TEMP"], "asc_key.json"), "w"))
+          PY
+          IPA=$(ls build/export/*.ipa | head -1)
+          fastlane run upload_to_testflight ipa:"$IPA" api_key_path:"$RUNNER_TEMP/asc_key.json" skip_waiting_for_build_processing:true

@@ -1,0 +1,11 @@
+build/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+.build/
+.swiftpm/
+Packages/SkyRayXray/Vendor/
+xcuserdata/
+*.ipa
+*.xcarchive
+.DS_Store

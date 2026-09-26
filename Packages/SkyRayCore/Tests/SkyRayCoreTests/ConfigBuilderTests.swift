@@ -1,0 +1,57 @@
+import XCTest
+@testable import SkyRayCore
+
+final class ConfigBuilderTests: XCTestCase {
+    private let outbound = #"{"tag":"whatever","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,"users":[{"id":"u","encryption":"none"}]}]},"streamSettings":{"network":"ws","security":"tls"},"mux":{"enabled":true}}"#
+
+    private func json(_ s: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(s.utf8)) as! [String: Any] }
+
+    func testTunnelConfigShape() throws {
+        let s = try XrayConfigBuilder.tunnelConfig(outboundJSON: outbound, tunFD: 7, assetDir: "/assets", xrayLogPath: "/logs/xray.log", probePort: 41000)
+        let c = try json(s)
+        let env = c["env"] as! [String: String]
+        XCTAssertEqual(env["XRAY_TUN_FD"], "7"); XCTAssertEqual(env["xray.tun.fd"], "7"); XCTAssertEqual(env["XRAY_LOCATION_ASSET"], "/assets")
+        let outbounds = c["outbounds"] as! [[String: Any]]
+        XCTAssertEqual(outbounds.first?["tag"] as? String, "proxy")
+        XCTAssertNil(outbounds.first?["mux"])
+        XCTAssertEqual(outbounds.map { $0["tag"] as! String }, ["proxy", "direct", "block", "dns-out"])
+        XCTAssertFalse(s.contains("geosite:private"))
+        let rules = (c["routing"] as! [String: Any])["rules"] as! [[String: Any]]
+        XCTAssertTrue(rules.contains { ($0["port"] as? String) == "443" && ($0["network"] as? String) == "udp" && ($0["outboundTag"] as? String) == "block" })
+        let levels = (c["policy"] as! [String: Any])["levels"] as! [String: [String: Any]]
+        XCTAssertEqual(levels["8"]?["bufferSize"] as? Int, 4)
+        XCTAssertEqual((c["dns"] as! [String: Any])["queryStrategy"] as? String, "UseIPv4")
+        let inbounds = c["inbounds"] as! [[String: Any]]
+        XCTAssertEqual(inbounds.map { $0["tag"] as! String }, ["tun", "probe"])
+        XCTAssertEqual(inbounds[1]["port"] as? Int, 41000)
+    }
+    func testPingConfigBindsOnlyWhenAsked() throws {
+        let plain = try json(try XrayConfigBuilder.pingConfig(outboundJSON: outbound))
+        let ob = (plain["outbounds"] as! [[String: Any]])[0]
+        XCTAssertEqual(ob["tag"] as? String, "proxy")
+        XCTAssertNil((ob["streamSettings"] as! [String: Any])["sockopt"])
+        let bound = try json(try XrayConfigBuilder.pingConfig(outboundJSON: outbound, bindInterface: "en0"))
+        let sockopt = ((bound["outbounds"] as! [[String: Any]])[0]["streamSettings"] as! [String: Any])["sockopt"] as! [String: Any]
+        XCTAssertEqual(sockopt["interface"] as? String, "en0")
+    }
+    func testInvalidOutboundThrows() {
+        XCTAssertThrowsError(try XrayConfigBuilder.pingConfig(outboundJSON: "not json"))
+    }
+    func testStoreRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("skyray-store-\(UUID().uuidString)")
+        let store = SkyRayStore(root: dir)
+        XCTAssertNil(store.loadSnapshot())
+        var info = SubscriptionInfo(); info.download = 5
+        let snap = SubscriptionSnapshot(url: "https://x/sub/0123456789abcdef", name: "EthaVPN", fetchedAt: Date(timeIntervalSince1970: 1000), info: info,
+                                        lines: [Line(id: "a", link: "vless://x", remark: "EthaVPN-WS-cdn-CleanIP1-443", transport: "WS", endpointLabel: "CleanIP1", port: 443, order: 0, outboundJSON: "{}")])
+        store.saveSnapshot(snap)
+        XCTAssertEqual(store.loadSnapshot(), snap)
+        store.updateSelection { $0.selectedLineId = "a"; $0.pinned = true; $0.results["a"] = 42 }
+        XCTAssertEqual(store.selection.selectedLineId, "a"); XCTAssertTrue(store.selection.pinned); XCTAssertEqual(store.selection.delay(of: "a"), 42)
+        store.declarationAccepted = true
+        store.wipe(rememberingDeletedLink: snap.url)
+        XCTAssertNil(store.loadSnapshot()); XCTAssertNil(store.selection.selectedLineId)
+        XCTAssertEqual(store.deletedLink, snap.url); XCTAssertTrue(store.declarationAccepted)
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
