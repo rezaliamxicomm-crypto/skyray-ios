@@ -92,6 +92,8 @@ final class AppModel: ObservableObject {
     func onLaunch() async {
         guard !launched else { return }
         launched = true
+        // Every open starts in Auto (fastest): a line picked from the menu is pinned for the session only.
+        if store.selection.pinned { store.updateSelection { $0.pinned = false }; AppLog.info("launch: back to Auto") }
         await vpn.load()
         await onActive()
         await DevTools.applyLaunchArguments(model: self)
