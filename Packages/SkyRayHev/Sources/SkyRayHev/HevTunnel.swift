@@ -15,8 +15,9 @@ public final class HevTunnel {
 
     public init() {}
 
-    /// The YAML hev reads. The misc values are the ones measured on a phone at 15 MiB idle / 27 MiB under load
-    /// together with Xray (the 50 MiB extension limit is the constraint).
+    /// The YAML hev reads. The misc values follow upstream's advice for low-memory iOS (small TCP buffers, the task
+    /// stack sized to them): with the previous app's 64 KiB buffers the extension reached 46 MiB under a download on
+    /// 2026-09-30 and iOS killed it at its ~50 MiB limit.
     public static func config(mtu: Int, ipv4: String, ipv6: String, socksPort: Int) -> String {
         """
         tunnel:
@@ -28,9 +29,9 @@ public final class HevTunnel {
           address: 127.0.0.1
           udp: 'udp'
         misc:
-          task-stack-size: 86016
-          tcp-buffer-size: 65536
-          max-session-count: 512
+          task-stack-size: 24576
+          tcp-buffer-size: 4096
+          max-session-count: 1200
           connect-timeout: 5000
           tcp-read-write-timeout: 300000
           udp-read-write-timeout: 60000
