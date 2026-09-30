@@ -115,6 +115,30 @@ public enum XrayConfigBuilder {
         return try serialize(config)
     }
 
+    /// The test instance: one loopback HTTP inbound per line, routed to that line's outbound, so the app can send
+    /// two requests down a kept-alive connection per line and keep the smaller time — what the Android app's
+    /// library does, and why its numbers are the warm round trip rather than handshakes plus a request. Bound to
+    /// the physical interface while the tunnel is up so the measurement does not run through the tunnel.
+    public static func testConfig(lines: [(id: String, outboundJSON: String, port: Int)], bindInterface: String? = nil,
+                                  options: Options = Options()) throws -> String {
+        var inbounds: [[String: Any]] = []
+        var outbounds: [[String: Any]] = []
+        var rules: [[String: Any]] = []
+        for line in lines {
+            var proxy = try outbound(from: line.outboundJSON)
+            proxy["tag"] = "out-" + line.id
+            var chain = proxyOutbounds(proxy, options: options, bindInterface: bindInterface)
+            if chain.count == 2 { chain[1]["tag"] = "fragment-" + line.id; chain[0] = withSockopt(chain[0]) { $0["dialerProxy"] = "fragment-" + line.id } }
+            outbounds.append(contentsOf: chain)
+            inbounds.append(["tag": "in-" + line.id, "protocol": "http", "listen": "127.0.0.1", "port": line.port])
+            rules.append(["type": "field", "inboundTag": ["in-" + line.id], "outboundTag": "out-" + line.id])
+        }
+        outbounds.append(["tag": "block", "protocol": "blackhole"])
+        rules.append(["type": "field", "network": "tcp,udp", "outboundTag": "block"])
+        return try serialize(["log": ["loglevel": "none"], "inbounds": inbounds, "outbounds": outbounds,
+                              "routing": ["domainStrategy": "AsIs", "rules": rules]])
+    }
+
     /// One line for pingBatch; bound to the physical interface while the tunnel is up so the measurement does not
     /// run through the tunnel.
     public static func pingConfig(outboundJSON: String, bindInterface: String? = nil, options: Options = Options()) throws -> String {

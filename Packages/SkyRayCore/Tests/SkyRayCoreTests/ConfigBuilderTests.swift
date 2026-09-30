@@ -60,6 +60,23 @@ final class ConfigBuilderTests: XCTestCase {
         let sockopt = ((bound["outbounds"] as! [[String: Any]])[0]["streamSettings"] as! [String: Any])["sockopt"] as! [String: Any]
         XCTAssertEqual(sockopt["interface"] as? String, "en0")
     }
+    func testTestConfigRoutesEachInboundToItsLine() throws {
+        let c = try json(try XrayConfigBuilder.testConfig(lines: [(id: "a", outboundJSON: outbound, port: 43001), (id: "b", outboundJSON: outbound, port: 43002)], bindInterface: "en0"))
+        let inbounds = c["inbounds"] as! [[String: Any]]
+        XCTAssertEqual(inbounds.map { $0["tag"] as! String }, ["in-a", "in-b"])
+        XCTAssertEqual(inbounds[1]["port"] as? Int, 43002)
+        let outbounds = c["outbounds"] as! [[String: Any]]
+        XCTAssertEqual(outbounds.map { $0["tag"] as! String }, ["out-a", "out-b", "block"])
+        XCTAssertEqual(((outbounds[0]["streamSettings"] as! [String: Any])["sockopt"] as! [String: Any])["interface"] as? String, "en0")
+        XCTAssertNil(outbounds[0]["mux"])
+        let rules = (c["routing"] as! [String: Any])["rules"] as! [[String: Any]]
+        XCTAssertEqual(rules.count, 3)
+        XCTAssertEqual(rules[0]["inboundTag"] as? [String], ["in-a"]); XCTAssertEqual(rules[0]["outboundTag"] as? String, "out-a")
+        XCTAssertEqual(rules[2]["outboundTag"] as? String, "block")
+        var frag = XrayConfigBuilder.Options(); frag.fragment = true
+        let f = try json(try XrayConfigBuilder.testConfig(lines: [(id: "a", outboundJSON: outbound, port: 1)], options: frag))
+        XCTAssertEqual((f["outbounds"] as! [[String: Any]]).map { $0["tag"] as! String }, ["out-a", "fragment-a", "block"])
+    }
     func testInvalidOutboundThrows() {
         XCTAssertThrowsError(try XrayConfigBuilder.pingConfig(outboundJSON: "not json"))
     }
