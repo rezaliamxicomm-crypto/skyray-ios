@@ -31,10 +31,10 @@ public final class HevTunnel {
         misc:
           task-stack-size: 24576
           tcp-buffer-size: 4096
-          max-session-count: 256
+          max-session-count: 128
           connect-timeout: 5000
           tcp-read-write-timeout: 300000
-          udp-read-write-timeout: 60000
+          udp-read-write-timeout: 15000
           limit-nofile: 65535
           log-level: warn
 

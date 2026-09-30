@@ -77,6 +77,18 @@ final class ConfigBuilderTests: XCTestCase {
         let f = try json(try XrayConfigBuilder.testConfig(lines: [(id: "a", outboundJSON: outbound, port: 1)], options: frag))
         XCTAssertEqual((f["outbounds"] as! [[String: Any]]).map { $0["tag"] as! String }, ["out-a", "fragment-a", "block"])
     }
+    func testXhttpLinesGetTheAppsXmuxConcurrency() throws {
+        let xhttp = #"{"protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,"users":[{"id":"u","encryption":"none"}]}]},"streamSettings":{"network":"xhttp","security":"tls","xhttpSettings":{"path":"/p","mode":"packet-up","extra":{"scMaxEachPostBytes":"100000-200000","xmux":{"maxConcurrency":"1-4","hKeepAlivePeriod":45}}}}}"#
+        let c = try json(try XrayConfigBuilder.tunnelConfig(outboundJSON: xhttp, socksPort: 1, probePort: 2, assetDir: "/a", xrayLogPath: "/l"))
+        let extra = (((c["outbounds"] as! [[String: Any]])[0]["streamSettings"] as! [String: Any])["xhttpSettings"] as! [String: Any])["extra"] as! [String: Any]
+        let xmux = extra["xmux"] as! [String: Any]
+        XCTAssertEqual(xmux["maxConcurrency"] as? String, "16")
+        XCTAssertEqual(xmux["hKeepAlivePeriod"] as? Int, 45)
+        XCTAssertEqual(extra["scMaxEachPostBytes"] as? String, "100000-200000")
+        // a WS line is left alone
+        let ws = try json(try XrayConfigBuilder.tunnelConfig(outboundJSON: outbound, socksPort: 1, probePort: 2, assetDir: "/a", xrayLogPath: "/l"))
+        XCTAssertNil((((ws["outbounds"] as! [[String: Any]])[0]["streamSettings"] as! [String: Any])["xhttpSettings"]))
+    }
     func testInvalidOutboundThrows() {
         XCTAssertThrowsError(try XrayConfigBuilder.pingConfig(outboundJSON: "not json"))
     }

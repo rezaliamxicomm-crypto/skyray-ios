@@ -21,6 +21,10 @@ public enum XrayConfigBuilder {
         /// a measured retry on WS lines.
         public var mux: Bool = false
         public var muxConcurrency: Int = 8
+        /// XHTTP's own multiplexing: streams per real HTTP/2 connection. The server's links say 1-4; on a phone
+        /// every real connection is a TLS session and HTTP/2 state inside the 50 MiB extension, so the app packs
+        /// more streams per connection. 0 keeps the link's value.
+        public var xhttpMaxConcurrency: Int = 16
         public init() {}
     }
 
@@ -50,9 +54,25 @@ public enum XrayConfigBuilder {
         return ob
     }
 
+    /// XHTTP lines: the xmux concurrency the app wants, the rest of the link's `extra` untouched.
+    static func withXmux(_ outbound: [String: Any], maxConcurrency: Int) -> [String: Any] {
+        guard maxConcurrency > 0, var stream = outbound["streamSettings"] as? [String: Any],
+              (stream["network"] as? String) == "xhttp" else { return outbound }
+        var ob = outbound
+        var xhttp = stream["xhttpSettings"] as? [String: Any] ?? [:]
+        var extra = xhttp["extra"] as? [String: Any] ?? [:]
+        var xmux = extra["xmux"] as? [String: Any] ?? [:]
+        xmux["maxConcurrency"] = String(maxConcurrency)
+        extra["xmux"] = xmux
+        xhttp["extra"] = extra
+        stream["xhttpSettings"] = xhttp
+        ob["streamSettings"] = stream
+        return ob
+    }
+
     /// The line's outbound — dialling through a fragmenting freedom outbound when asked — and that outbound.
     static func proxyOutbounds(_ proxy: [String: Any], options: Options, bindInterface: String? = nil) -> [[String: Any]] {
-        var line = proxy
+        var line = withXmux(proxy, maxConcurrency: options.xhttpMaxConcurrency)
         if let iface = bindInterface, !iface.isEmpty { line = withSockopt(line) { $0["interface"] = iface } }
         guard options.fragment else { return [line] }
         line = withSockopt(line) { $0["dialerProxy"] = "fragment" }

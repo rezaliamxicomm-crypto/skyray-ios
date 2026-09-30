@@ -40,7 +40,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryTicks = 0
     private var lastGuardAt = Date.distantPast
     /// iOS kills the extension at about 50 MiB; Xray restarted in place (hev stays, apps reconnect) costs a second.
-    private let guardMB = 44.0
+    private let guardMB = 46.5
 
     // MARK: lifecycle
 
@@ -209,7 +209,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let s = self.hev.stats()
             let line = self.active?.remark ?? "?"
             let text = String(format: "memory %.1f MiB on %@, tx %.1f MiB rx %.1f MiB", mb, line, Double(s.txBytes) / 1_048_576, Double(s.rxBytes) / 1_048_576)
-            if mb >= self.guardMB, let current = self.active, Date().timeIntervalSince(self.lastGuardAt) > 20 {
+            if mb >= self.guardMB, let current = self.active, Date().timeIntervalSince(self.lastGuardAt) > 45 {
                 self.lastGuardAt = Date()
                 self.log.warn(text + " — memory guard: restarting xray")
                 self.switchLine(to: current, reason: "memory guard")
