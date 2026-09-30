@@ -30,9 +30,11 @@ build_static() { # sdk arch min-version-flag
 }
 build_static iphoneos arm64 "-mios-version-min=15.0"
 build_static iphonesimulator arm64 "-miphonesimulator-version-min=15.0"
-# A flat Headers directory: the umbrella header and its module map at the root, which Xcode and SwiftPM both find.
-cp src/hev-main.h "$OUT/include/"
-printf 'module HevSocks5Tunnel {\n    umbrella header "hev-main.h"\n    export *\n}\n' > "$OUT/include/module.modulemap"
+# Upstream's header layout, nested under the module's name: Xcode copies every binary target's headers into one
+# include/ folder, and LibXray already owns include/module.modulemap there — a flat layout collides with it.
+mkdir -p "$OUT/include/HevSocks5Tunnel"
+cp src/hev-main.h "$OUT/include/HevSocks5Tunnel/"
+cp module.modulemap "$OUT/include/HevSocks5Tunnel/"
 xcodebuild -create-xcframework \
   -library "$OUT/iphoneos-arm64/libhev-socks5-tunnel.a" -headers "$OUT/include" \
   -library "$OUT/iphonesimulator-arm64/libhev-socks5-tunnel.a" -headers "$OUT/include" \
