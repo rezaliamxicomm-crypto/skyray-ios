@@ -21,10 +21,13 @@ final class Probe {
         session = URLSession(configuration: config)
     }
 
-    /// Milliseconds to the first answer, or -1.
+    /// The warm round trip in milliseconds — two requests down the kept-alive connection, the smaller one, as
+    /// the app's line test and the Android app measure — or -1 when nothing answered.
     func measure() -> Int64 {
         for url in [Etha.probeURL, Etha.probeFallbackURL] {
-            if let ms = head(url) { return ms }
+            guard let first = head(url) else { continue }
+            if let second = head(url) { return min(first, second) }
+            return first
         }
         return -1
     }
