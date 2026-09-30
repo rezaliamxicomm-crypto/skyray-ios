@@ -322,12 +322,22 @@ final class AppModel: ObservableObject {
                            vpn.isActive ? "up" : "down", iface ?? "-", summary))
     }
 
+    /// "Ping all": every line measured, then the outcome said out loud — the fastest line (moved to, in Auto), or
+    /// that the picked line stays and how to let Auto choose. Same as the Android app.
     func testAgain() async {
         guard hasSubscription, phase == .idle else { return }
         phase = .finding
         await testAll()
         phase = .idle
-        guard !selection.pinned, let best = AutoSelect.best(selection.candidates(lines)) else { return }
+        let best = AutoSelect.best(selection.candidates(lines))
+        if selection.pinned {
+            if let kept = currentLine?.displayName { banner = BannerMessage(text: L("ping.kept", kept), kind: .info) }
+            return
+        }
+        guard let best = best, let bestLine = lines.first(where: { $0.id == best }) else {
+            banner = BannerMessage(text: L("no.line"), kind: .error); return
+        }
+        banner = BannerMessage(text: L("ping.best", bestLine.displayName), kind: .ok)
         if best != selection.selectedLineId {
             store.updateSelection { $0.selectedLineId = best }
             selection = store.selection

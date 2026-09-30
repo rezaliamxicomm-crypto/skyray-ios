@@ -629,19 +629,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Test again"
+            "value": "Ping all"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "آزمایش دوباره"
+            "value": "پینگ همه"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Проверить снова"
+            "value": "Пинг всех"
           }
         }
       }
@@ -1493,6 +1493,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Доступ к камере выключен. Разрешите его в Настройках."
+          }
+        }
+      }
+    },
+    "ping.best": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fastest now: %@"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سریع‌ترین حالا: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Самый быстрый сейчас: %@"
+          }
+        }
+      }
+    },
+    "ping.kept": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ stays — choose Auto to switch to the fastest"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سرور %@ می‌ماند؛ برای رفتن به سریع‌ترین، «خودکار» را انتخاب کنید"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ остаётся — выберите Авто, чтобы переключаться на самый быстрый"
           }
         }
       }
