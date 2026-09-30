@@ -25,10 +25,12 @@ public enum ServerRows {
         return out
     }
 
-    /// What the closed menu shows: the pinned line's name, or "Auto · <the line Auto picked>".
-    public static func currentLabel(pinned: Bool, currentName: String?, auto: String, autoPicked: (String) -> String) -> String {
-        if pinned, let n = currentName { return LineName.display(n) }
-        if let n = currentName { return autoPicked(LineName.display(n)) }
+    /// What the closed menu shows: the pinned line's name, or "Auto · <the line Auto picked>", with the line's last
+    /// delay in brackets when it has one — the Android ServerPicker.currentLabel.
+    public static func currentLabel(pinned: Bool, currentName: String?, delayMs: Int64 = 0, auto: String, autoPicked: (String) -> String) -> String {
+        let line = currentName.map { delayMs > 0 ? "\(LineName.display($0)) (\(delayMs) ms)" : LineName.display($0) }
+        if pinned, let n = line { return n }
+        if let n = line { return autoPicked(n) }
         return auto
     }
 }

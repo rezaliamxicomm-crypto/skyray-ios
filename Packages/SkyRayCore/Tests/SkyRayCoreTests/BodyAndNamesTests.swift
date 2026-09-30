@@ -43,6 +43,8 @@ final class BodyAndNamesTests: XCTestCase {
         XCTAssertEqual(ServerRows.currentLabel(pinned: true, currentName: "EthaVPN-WS-fra-Domain-443", auto: "Auto", autoPicked: { "Auto · \($0)" }), "Domain · WS/443")
         XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: "EthaVPN-WS-fra-Domain-443", auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto · Domain · WS/443")
         XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: nil, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto")
+        XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: "EthaVPN-WS-fra-Domain-443", delayMs: 95, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto · Domain · WS/443 (95 ms)")
+        XCTAssertEqual(ServerRows.currentLabel(pinned: true, currentName: "EthaVPN-WS-fra-Domain-443", delayMs: 95, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Domain · WS/443 (95 ms)")
     }
     func testRotation() {
         func line(_ id: String, _ order: Int) -> Line { Line(id: id, link: "", remark: "EthaVPN-WS-cdn-\(id)-443", transport: "WS", endpointLabel: id, port: 443, order: order, outboundJSON: "{}") }

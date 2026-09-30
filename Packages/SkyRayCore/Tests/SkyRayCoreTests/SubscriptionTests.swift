@@ -73,6 +73,38 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertEqual(EthaLink.name(of: link), "EthaVPN")
         XCTAssertEqual(EthaLink.token(of: link + "#x"), "0123456789abcdef")
     }
+    func testOldAddressesMoveToTheCurrentOne() {
+        let old = "https://fra.mobileiphone.org/sub/0123456789abcdef#EthaVPN"
+        let now = "https://fra.skyrayconfig.org/sub/0123456789abcdef#EthaVPN"
+        XCTAssertEqual(EthaLink.migratedUrl(old), now)
+        XCTAssertEqual(EthaLink.migratedUrl("https://fra.mobileiphonez.org/sub/0123456789abcdef"), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
+        XCTAssertNil(EthaLink.migratedUrl("https://fra.skyrayconfig.org/sub/0123456789abcdef"))
+        XCTAssertNil(EthaLink.migratedUrl("https://evil.example/sub/0123456789abcdef"))
+        XCTAssertNil(EthaLink.migratedUrl("https://fra.mobileiphone.org/dl/"))
+        XCTAssertFalse(EthaLink.isSubLink(old))
+        XCTAssertEqual(EthaLink.normalized(old), now)
+        XCTAssertEqual(EthaLink.normalized(" \(now) "), now)
+        XCTAssertNil(EthaLink.normalized("vless://x"))
+        XCTAssertEqual(EthaLink.extract(from: "Your link: \(old), tap it."), now)
+        XCTAssertTrue(EthaLink.sameAccount(old, "https://fra.skyrayconfig.org/sub/0123456789abcdef#Other"))
+        XCTAssertFalse(EthaLink.sameAccount(old, "https://fra.skyrayconfig.org/sub/fedcba9876543210"))
+        XCTAssertFalse(EthaLink.sameAccount(nil, old))
+        XCTAssertFalse(EthaLink.sameAccount(old, nil))
+    }
+    func testOldAppFilesYieldTheLink() {
+        let profiles = #"[{"name":"EthaVPN-WS-cdn-CleanIP1-443","outboundJSON":"{}","shareLink":"vless://x","subscriptionURL":"https://fra.mobileiphone.org/sub/0123456789abcdef"}]"#
+        XCTAssertEqual(OldAppFiles.firstLink(in: Data(profiles.utf8)), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
+        let subs = #"[{"url":"https://fra.skyrayconfig.org/sub/0123456789abcdef","title":"Reza","lastUpdated":"2026-09-30T00:00:00Z"}]"#
+        XCTAssertEqual(OldAppFiles.firstLink(in: Data(subs.utf8)), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
+        XCTAssertNil(OldAppFiles.firstLink(in: Data(#"[{"url":"https://other.example/sub/0123456789abcdef"}]"#.utf8)))
+        XCTAssertNil(OldAppFiles.firstLink(in: Data("not json".utf8)))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("skyray-old-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        XCTAssertNil(OldAppFiles.link(inContainer: dir))
+        try? Data(profiles.utf8).write(to: dir.appendingPathComponent("profiles.json"))
+        XCTAssertEqual(OldAppFiles.link(inContainer: dir), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
+        try? FileManager.default.removeItem(at: dir)
+    }
     func testApplyHeadersFillsTheInfoAndLeavesItAloneOtherwise() {
         var info = SubscriptionInfo()
         XCTAssertFalse(SubscriptionHeaders.apply(["content-type": "text/plain"], to: &info))

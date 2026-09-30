@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// The short message at the top of the screen (added / failed / switched), gone after a few seconds.
+/// The short message at the top of the screen (added / failed / switched), gone after a few seconds — the
+/// Android app's toasts.
 struct BannerView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         if let banner = model.banner {
             Text(banner.text)
-                .font(AppFont.small)
+                .font(AppFont.muted)
                 .foregroundColor(.white)
+                .multilineTextAlignment(.center)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(color(banner.kind))
                 .cornerRadius(10)
@@ -25,7 +27,7 @@ struct BannerView: View {
     private func color(_ kind: BannerMessage.Kind) -> Color {
         switch kind {
         case .ok: return .connectOn
-        case .error: return Color(red: 0.72, green: 0.16, blue: 0.16)
+        case .error: return .error
         case .info: return .primaryBlue
         }
     }

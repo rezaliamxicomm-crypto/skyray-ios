@@ -12,6 +12,7 @@ struct RootView: View {
     }
 }
 
+/// The Android toolbar: the app's name, the settings gear at the end; Settings opens as its own screen with a back arrow.
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showSettings = false
@@ -23,11 +24,15 @@ struct MainView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                            .accessibilityLabel(Text(L("settings")))
+                        Button { showSettings = true } label: {
+                            Image(systemName: "gearshape.fill").foregroundColor(.onSurface)
+                        }
+                        .accessibilityLabel(Text(L("settings")))
                     }
                 }
-                .sheet(isPresented: $showSettings) { SettingsView() }
+                .background(
+                    NavigationLink(destination: SettingsView(), isActive: $showSettings) { EmptyView() }.hidden()
+                )
         }
         .navigationViewStyle(.stack)
         .overlay(alignment: .top) { BannerView() }

@@ -4,6 +4,8 @@
 <dict>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
+		<string>applinks:fra.skyrayconfig.org</string>
+		<string>applinks:fra.mobileiphonez.org</string>
 		<string>applinks:fra.mobileiphone.org</string>
 	</array>
 	<key>com.apple.developer.networking.networkextension</key>

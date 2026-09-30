@@ -1,59 +1,63 @@
 import SwiftUI
 import SkyRayCore
 
+/// The Android settings screen (res/layout/activity_etha_settings.xml): plain rows on the background — an icon,
+/// a 16 pt title, a 13 pt summary. The rows Android has and iOS cannot (apps that bypass the VPN, check for
+/// update) are left out; the rest keep their order.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.dismiss) private var dismiss
     @State private var confirmDelete = false
     @State private var showLogs = false
 
     var body: some View {
-        NavigationView {
-            Form {
-                Section {
-                    NavigationLink(destination: ServerListView()) {
-                        row("antenna.radiowaves.left.and.right", L("server.title"), model.serverLabel)
-                    }
-                    .disabled(!model.hasSubscription)
-                    Button { open(UIApplication.openSettingsURLString) } label: {
-                        row("globe", L("language"), Locale.current.localizedString(forLanguageCode: appLanguage) ?? L("language.system"))
-                    }
+        ScrollView {
+            VStack(spacing: 0) {
+                NavigationLink(destination: ServerListView()) {
+                    row("antenna.radiowaves.left.and.right", L("server.pick"), model.serverLabel)
                 }
-                Section {
-                    Button { showLogs = true } label: { row("doc.text", L("send.logs"), L("send.logs.hint")) }
-                    NavigationLink(destination: AboutView()) { row("info.circle", L("about"), nil) }
-                    Button { open(Etha.privacyURL) } label: { row("hand.raised", L("privacy"), nil) }
+                .disabled(!model.hasSubscription)
+                Button { open(UIApplication.openSettingsURLString) } label: {
+                    row("globe", L("language"), Locale.current.localizedString(forLanguageCode: appLanguage) ?? L("language.system"))
                 }
-                Section {
-                    Button(role: .destructive) { confirmDelete = true } label: { row("trash", L("delete.account"), L("delete.hint")) }
-                }
+                Button { showLogs = true } label: { row("doc.text", L("send.logs"), L("send.logs.hint")) }
+                NavigationLink(destination: AboutView()) { row("info.circle", L("about"), nil) }
+                Button { open(Etha.privacyURL) } label: { row("hand.raised", L("privacy"), nil) }
+                Button { confirmDelete = true } label: { row("trash", L("delete.account"), L("delete.hint")) }
             }
-            .navigationTitle(L("settings"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button(L("done")) { dismiss() } } }
-            .confirmationDialog(L("delete.account"), isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button(L("delete.do"), role: .destructive) { Task { await model.deleteAccount(); dismiss() } }
-                Button(L("cancel"), role: .cancel) {}
-            } message: {
-                Text(L("delete.confirm"))
-            }
-            .sheet(isPresented: $showLogs) { LogShareSheet(urls: logURLs) }
         }
-        .navigationViewStyle(.stack)
+        .background(Color.bg.ignoresSafeArea())
+        .navigationTitle(L("settings"))
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(L("delete.account"), isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button(L("delete.do"), role: .destructive) { Task { await model.deleteAccount() } }
+            Button(L("cancel"), role: .cancel) {}
+        } message: {
+            Text(L("delete.confirm"))
+        }
+        .sheet(isPresented: $showLogs) { LogShareSheet(urls: logURLs) }
     }
 
     private var logURLs: [URL] {
         [model.store.appLogURL, model.store.tunnelLogURL, model.store.xrayLogURL].filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    /// EthaSettingsRow: 16 pt of padding, a 24 pt icon, the text 16 pt further in.
     private func row(_ icon: String, _ title: String, _ subtitle: String?) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).frame(width: 24).foregroundColor(.primaryBlue)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(AppFont.body).foregroundColor(.primary)
+        HStack(alignment: .center, spacing: 0) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .frame(width: 24, height: 24)
+                .foregroundColor(.muted)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(AppFont.row).foregroundColor(.onSurface)
                 if let s = subtitle, !s.isEmpty { Text(s).font(AppFont.small).foregroundColor(.muted) }
             }
+            .padding(.leading, 16)
+            Spacer(minLength: 0)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func open(_ string: String) {
@@ -61,25 +65,37 @@ struct SettingsView: View {
     }
 }
 
+/// Android's ServerPicker dialog: Auto (fastest) first, then every line with its ping, and Test again.
 struct ServerListView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        List {
-            ForEach(Array(model.serverRows.enumerated()), id: \.offset) { _, row in
-                Button {
-                    Task { await model.pick(lineId: row.id) }
-                } label: {
-                    HStack {
-                        Text(row.text).font(AppFont.body).foregroundColor(.primary)
-                        Spacer()
-                        if isCurrent(row) { Image(systemName: "checkmark").foregroundColor(.primaryBlue) }
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(Array(model.serverRows.enumerated()), id: \.offset) { _, row in
+                    Button {
+                        Task { await model.pick(lineId: row.id) }
+                    } label: {
+                        HStack(spacing: 16) {
+                            Image(systemName: isCurrent(row) ? "largecircle.fill.circle" : "circle")
+                                .font(.system(size: 20)).foregroundColor(isCurrent(row) ? .primaryBlue : .muted)
+                            Text(row.text).font(AppFont.row).foregroundColor(.onSurface)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(16)
+                        .contentShape(Rectangle())
                     }
                 }
+                Button(L("test.again")) { Task { await model.testAgain() } }
+                    .buttonStyle(EthaTextButtonStyle())
+                    .disabled(model.busy)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
             }
-            Button(L("test.again")) { Task { await model.testAgain() } }.disabled(model.busy)
         }
+        .background(Color.bg.ignoresSafeArea())
         .navigationTitle(L("server.pick"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func isCurrent(_ row: ServerRows.Row) -> Bool {

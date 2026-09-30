@@ -1,0 +1,4 @@
+# hev-socks5-tunnel source release pinned for SkyRay iOS (scripts/fetch-hev.sh verifies the tarball against this)
+tag=2.18.0
+asset=hev-socks5-tunnel-2.18.0.tar.xz
+sha256=93b3b33127436b4eab669798f1d50e019008585a27880df8cbdeffe5e70cb665

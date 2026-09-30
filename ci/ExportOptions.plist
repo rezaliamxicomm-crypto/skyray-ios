@@ -18,7 +18,7 @@
 	<dict>
 		<key>com.allion.skyray</key>
 		<string>SkyRay AppStore</string>
-		<key>com.allion.skyray.tunnel</key>
+		<key>com.allion.skyray.PacketTunnel</key>
 		<string>SkyRay Tunnel AppStore</string>
 	</dict>
 </dict>

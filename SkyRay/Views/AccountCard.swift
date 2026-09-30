@@ -1,49 +1,57 @@
 import SwiftUI
 import SkyRayCore
 
-/// Days and data left, the service's announcement, Support and Refresh. No Renew: renewals happen in
-/// Telegram, and the App Store does not allow a button that points there.
+/// The account card as on Android: the subscription's title, the days and data tiles, the service's announcement,
+/// then the buttons. Android's row is Renew | Support with Refresh under it; here Support | Refresh: the App Store
+/// forbids a button that leads to a purchase outside it, and renewals happen in Telegram.
 struct AccountCard: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Card {
-            Text(model.snapshot?.info.profileTitle ?? model.snapshot?.name ?? Etha.subName).font(AppFont.title)
+            Text(model.snapshot?.info.profileTitle ?? model.snapshot?.name ?? Etha.subName)
+                .font(AppFont.title).foregroundColor(.onSurface)
             HStack(spacing: 12) {
                 tile(value: days.value, label: days.label)
                 tile(value: data.value, label: data.label)
             }
+            .padding(.top, 14)
             if let announce = model.snapshot?.info.announce, !announce.isEmpty {
-                Text(announce).font(AppFont.body)
+                Text(announce)
+                    .font(AppFont.body).foregroundColor(.onSurface)
+                    .lineSpacing(3)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.announce)
+                    .cornerRadius(14)
+                    .padding(.top, 14)
             }
-            HStack(spacing: 12) {
-                Link(destination: URL(string: model.snapshot?.info.supportURL ?? Etha.supportURL) ?? URL(string: Etha.supportURL)!) {
-                    Text(L("support")).font(AppFont.headline).frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(.primaryBlue)
+            HStack(spacing: 10) {
+                Button { open(model.snapshot?.info.supportURL ?? Etha.supportURL) } label: { Text(L("support")) }
+                    .buttonStyle(EthaPrimaryButtonStyle())
                 Button { Task { await model.refreshNow() } } label: {
                     HStack(spacing: 6) {
-                        if model.refreshing { ProgressView().scaleEffect(0.8) } else { Image(systemName: "arrow.clockwise") }
-                        Text(L("refresh")).font(AppFont.headline)
+                        if model.refreshing { ProgressView().scaleEffect(0.8) }
+                        Text(L("refresh"))
                     }
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(EthaOutlinedButtonStyle())
                 .disabled(model.refreshing)
             }
+            .padding(.top, 14)
         }
     }
 
+    /// EthaTile: the surfaceVariant colour, 16 pt corners, 14 pt of padding; the value in 22 pt bold, the label in 13 pt.
     private func tile(value: String, label: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value).font(AppFont.tile).lineLimit(1).minimumScaleFactor(0.5)
-            Text(label).font(AppFont.small).foregroundColor(.muted).multilineTextAlignment(.center)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(value).font(AppFont.tileValue).foregroundColor(.onSurface).lineLimit(1).minimumScaleFactor(0.6)
+            Text(label).font(AppFont.small).foregroundColor(.muted)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.surfaceVariant)
-        .cornerRadius(12)
+        .cornerRadius(16)
     }
 
     private var days: (value: String, label: String) {
@@ -66,5 +74,9 @@ struct AccountCard: View {
         if bytes >= 1 << 30 { return String(format: "%.1f GB", Double(bytes) / 1_073_741_824) }
         if bytes >= 1 << 20 { return String(format: "%.0f MB", Double(bytes) / 1_048_576) }
         return String(format: "%.0f KB", Double(bytes) / 1024)
+    }
+
+    private func open(_ string: String) {
+        if let url = URL(string: string) { UIApplication.shared.open(url) }
     }
 }

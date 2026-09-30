@@ -1,1 +1,2 @@
-Chocolate4U/Iran-v2ray-rules release 202609211010 (geoip-lite.dat, geosite-lite.dat). Refresh: scripts/fetch-geo.sh <tag>
+Chocolate4U/Iran-v2ray-rules release 202609211010: its geoip-lite.dat and geosite-lite.dat, stored under the names Xray
+looks up (geoip.dat, geosite.dat) in XRAY_LOCATION_ASSET. Refresh: scripts/fetch-geo.sh <tag>

@@ -94,10 +94,14 @@ final class AppModel: ObservableObject {
         launched = true
         await vpn.load()
         await onActive()
+        await DevTools.applyLaunchArguments(model: self)
     }
 
     func onActive() async {
         reload()
+        if declarationAccepted, !hasSubscription, store.deletedLink == nil {
+            await OldAppImport.attempt(model: self)
+        }
         if declarationAccepted, !hasSubscription {
             if await ClipboardImport.attempt(model: self) == false {
                 try? await Task.sleep(nanoseconds: 400_000_000)
@@ -108,13 +112,14 @@ final class AppModel: ObservableObject {
             await refreshQuietly(reason: "stale on open")
         }
         await pollStatus()
+        DevTools.mirrorLogs(from: store)
     }
 
     private func statusChanged(_ status: NEVPNStatus) {
         switch status {
         case .connected:
             phase = .idle
-            Task { await self.probeNow() }
+            Task { await self.probeNow(); DevTools.mirrorLogs(from: self.store) }
         case .disconnected, .invalid:
             if phase == .connecting || phase == .disconnecting { phase = .idle }
             tunnel = nil
@@ -164,7 +169,8 @@ final class AppModel: ObservableObject {
     }
 
     func importFromClipboard(_ link: String) async {
-        guard link != clipboardTried, link != store.deletedLink else { return }
+        // by account, not by text: the deleted link may carry a name or an earlier address
+        guard link != clipboardTried, !EthaLink.sameAccount(link, store.deletedLink) else { return }
         clipboardTried = link
         await importLink(link, source: .clipboard)
     }
@@ -342,8 +348,12 @@ final class AppModel: ObservableObject {
                         auto: L("auto"), untested: L("ping.untested"), failed: L("ping.failed"))
     }
 
+    /// The server field: the chosen line (Android's selected server) with its last delay, or Auto.
     var serverLabel: String {
-        ServerRows.currentLabel(pinned: selection.pinned, currentName: currentLine?.remark, auto: L("auto"), autoPicked: { L("auto.picked", $0) })
+        let id = selection.selectedLineId
+        let name = id.flatMap { sid in lines.first { $0.id == sid }?.remark }
+        let delay = id.map { selection.delay(of: $0) } ?? 0
+        return ServerRows.currentLabel(pinned: selection.pinned, currentName: name, delayMs: delay, auto: L("auto"), autoPicked: { L("auto.picked", $0) })
     }
 
     // MARK: delete account

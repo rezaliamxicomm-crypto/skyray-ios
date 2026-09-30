@@ -115,7 +115,8 @@ struct SubscriptionImporter {
     @discardableResult
     func refresh() async throws -> SubscriptionSnapshot {
         guard let current = store.loadSnapshot() else { throw FetchError.unknownLink }
-        let link = current.name == Etha.subName ? current.url : current.url + "#" + (current.name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? current.name)
+        let base = EthaLink.migratedUrl(current.url) ?? current.url   // a snapshot from before the address moved
+        let link = current.name == Etha.subName ? base : base + "#" + (current.name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? current.name)
         return try await fetchAndStore(link: link)
     }
 

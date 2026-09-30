@@ -5,9 +5,15 @@ public enum XrayConfigBuilder {
     public struct Options {
         public var bufferSizeKB: Int = 4
         public var logLevel: String = "warning"
-        public var mtu: Int = 1500
+        /// Shecan, direct, for Iranian names; the rest through the line.
         public var directDNS: String = "178.22.122.100"
-        public var proxyDNS: String = "1.1.1.1"
+        public var proxyDNS: [String] = ["1.1.1.1", "8.8.8.8"]
+        /// Splits the TLS ClientHello of the line's own connection (Xray's freedom `fragment`), the answer to a
+        /// network that drops the handshake by its SNI. Off unless every line failed without it.
+        public var fragment: Bool = false
+        public var fragmentPackets: String = "tlshello"
+        public var fragmentLength: String = "100-200"
+        public var fragmentInterval: String = "10-20"
         public init() {}
     }
 
@@ -27,42 +33,67 @@ public enum XrayConfigBuilder {
         return s
     }
 
-    /// The full config of the tunnel extension: the tun inbound on the utun fd, Iran-direct routing,
-    /// a loopback HTTP inbound the watchdog probes through, DNS split domestic/foreign.
-    public static func tunnelConfig(outboundJSON: String, tunFD: Int32, assetDir: String, xrayLogPath: String,
-                                    probePort: Int, options: Options = Options()) throws -> String {
+    static func withSockopt(_ outbound: [String: Any], _ change: (inout [String: Any]) -> Void) -> [String: Any] {
+        var ob = outbound
+        var stream = ob["streamSettings"] as? [String: Any] ?? [:]
+        var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
+        change(&sockopt)
+        stream["sockopt"] = sockopt
+        ob["streamSettings"] = stream
+        return ob
+    }
+
+    /// The line's outbound — dialling through a fragmenting freedom outbound when asked — and that outbound.
+    static func proxyOutbounds(_ proxy: [String: Any], options: Options, bindInterface: String? = nil) -> [[String: Any]] {
+        var line = proxy
+        if let iface = bindInterface, !iface.isEmpty { line = withSockopt(line) { $0["interface"] = iface } }
+        guard options.fragment else { return [line] }
+        line = withSockopt(line) { $0["dialerProxy"] = "fragment" }
+        var fragment: [String: Any] = [
+            "tag": "fragment",
+            "protocol": "freedom",
+            "settings": ["domainStrategy": "UseIPv4",
+                         "fragment": ["packets": options.fragmentPackets, "length": options.fragmentLength, "interval": options.fragmentInterval]],
+            "streamSettings": ["sockopt": ["tcpNoDelay": true]]
+        ]
+        if let iface = bindInterface, !iface.isEmpty { fragment = withSockopt(fragment) { $0["interface"] = iface } }
+        return [line, fragment]
+    }
+
+    /// The tunnel's config: a loopback SOCKS5 inbound (TCP and UDP) that hev-socks5-tunnel feeds with the utun's
+    /// packets, a loopback HTTP inbound the watchdog probes through, Iran-direct routing, DNS split domestic/foreign.
+    public static func tunnelConfig(outboundJSON: String, socksPort: Int, probePort: Int, assetDir: String, xrayLogPath: String,
+                                    options: Options = Options()) throws -> String {
         let proxy = try outbound(from: outboundJSON)
+        var outbounds = proxyOutbounds(proxy, options: options)
+        outbounds.append(["tag": "direct", "protocol": "freedom", "settings": ["domainStrategy": "UseIPv4"]])
+        outbounds.append(["tag": "block", "protocol": "blackhole", "settings": ["response": ["type": "http"]]])
+        outbounds.append(["tag": "dns-out", "protocol": "dns"])
+        var dnsServers: [Any] = [
+            ["address": options.directDNS, "port": 53, "domains": ["geosite:category-ir", "domain:ir"], "skipFallback": true]
+        ]
+        dnsServers.append(contentsOf: options.proxyDNS)
         let config: [String: Any] = [
-            "env": ["XRAY_TUN_FD": String(tunFD), "xray.tun.fd": String(tunFD), "XRAY_LOCATION_ASSET": assetDir],
+            "env": ["XRAY_LOCATION_ASSET": assetDir],
             "log": ["loglevel": options.logLevel, "access": "none", "error": xrayLogPath, "dnsLog": false],
             "policy": [
                 "levels": ["8": ["handshake": 4, "connIdle": 300, "uplinkOnly": 1, "downlinkOnly": 1, "bufferSize": options.bufferSizeKB]],
                 "system": ["statsInboundUplink": false, "statsInboundDownlink": false, "statsOutboundUplink": false, "statsOutboundDownlink": false]
             ],
-            "dns": [
-                "tag": "dns-module",
-                "queryStrategy": "UseIPv4",
-                "servers": [
-                    ["address": options.directDNS, "port": 53, "domains": ["geosite:category-ir", "domain:ir"], "skipFallback": true, "tag": "dns-domestic"],
-                    options.proxyDNS
-                ]
-            ],
+            "dns": ["tag": "dns-module", "queryStrategy": "UseIPv4", "servers": dnsServers],
             "inbounds": [
-                ["tag": "tun", "protocol": "tun", "settings": ["mtu": options.mtu, "userLevel": 8],
+                ["tag": "socks", "protocol": "socks", "listen": "127.0.0.1", "port": socksPort,
+                 "settings": ["auth": "noauth", "udp": true, "userLevel": 8],
                  "sniffing": ["enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": false]],
                 ["tag": "probe", "protocol": "http", "listen": "127.0.0.1", "port": probePort, "settings": ["userLevel": 8]]
             ],
-            "outbounds": [
-                proxy,
-                ["tag": "direct", "protocol": "freedom", "settings": ["domainStrategy": "UseIPv4"]],
-                ["tag": "block", "protocol": "blackhole", "settings": ["response": ["type": "http"]]],
-                ["tag": "dns-out", "protocol": "dns"]
-            ],
+            "outbounds": outbounds,
             "routing": [
-                "domainStrategy": "AsIs",
+                "domainStrategy": "IPIfNonMatch",
+                "domainMatcher": "linear",
                 "rules": [
-                    ["type": "field", "inboundTag": ["tun"], "port": "53", "network": "tcp,udp", "outboundTag": "dns-out"],
-                    ["type": "field", "inboundTag": ["dns-domestic"], "outboundTag": "direct"],
+                    ["type": "field", "inboundTag": ["socks"], "port": "53", "network": "tcp,udp", "outboundTag": "dns-out"],
+                    ["type": "field", "inboundTag": ["dns-module"], "ip": [options.directDNS], "outboundTag": "direct"],
                     ["type": "field", "inboundTag": ["dns-module"], "outboundTag": "proxy"],
                     ["type": "field", "port": "443", "network": "udp", "outboundTag": "block"],
                     ["type": "field", "ip": ["geoip:private"], "outboundTag": "direct"],
@@ -74,17 +105,11 @@ public enum XrayConfigBuilder {
         return try serialize(config)
     }
 
-    /// One outbound for pingBatch; bound to the physical interface while the tunnel is up so the
-    /// measurement does not run through the tunnel.
-    public static func pingConfig(outboundJSON: String, bindInterface: String? = nil) throws -> String {
-        var proxy = try outbound(from: outboundJSON)
-        if let iface = bindInterface, !iface.isEmpty {
-            var stream = proxy["streamSettings"] as? [String: Any] ?? [:]
-            var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
-            sockopt["interface"] = iface
-            stream["sockopt"] = sockopt
-            proxy["streamSettings"] = stream
-        }
-        return try serialize(["log": ["loglevel": "none"], "outbounds": [proxy]])
+    /// One line for pingBatch; bound to the physical interface while the tunnel is up so the measurement does not
+    /// run through the tunnel.
+    public static func pingConfig(outboundJSON: String, bindInterface: String? = nil, options: Options = Options()) throws -> String {
+        let proxy = try outbound(from: outboundJSON)
+        let outbounds = proxyOutbounds(proxy, options: options, bindInterface: bindInterface)
+        return try serialize(["log": ["loglevel": "none"], "outbounds": outbounds])
     }
 }

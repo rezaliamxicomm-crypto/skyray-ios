@@ -2,14 +2,18 @@ import Foundation
 
 /// The service's constants — the same values as the Android app's AppConfig.ETHA_*.
 public enum Etha {
-    public static let subHost = "fra.mobileiphone.org"
+    /// The link's only address (operator's rule). Links on an earlier address are moved to it, never used as they are.
+    public static let subHost = "fra.skyrayconfig.org"
+    public static let subHosts = [subHost]
+    public static let oldSubHosts = ["fra.mobileiphonez.org", "fra.mobileiphone.org"]
     public static let subPath = "/sub/"
     public static let subName = "EthaVPN"
     public static let supportURL = "https://t.me/Ethaconfigbot?start=app_support"
     public static let privacyURL = "https://allionapp.com/skyray-privacy"
     public static let sourceURL = "https://github.com/rezaliamxicomm-crypto/skyray-ios"
     public static let appGroup = "group.com.allion.skyray"
-    public static let tunnelBundleID = "com.allion.skyray.tunnel"
+    /// The extension's App ID as the previous SkyRay registered it: the phones' VPN configuration names it.
+    public static let tunnelBundleID = "com.allion.skyray.PacketTunnel"
     public static let refreshTaskID = "com.allion.skyray.refresh"
     /// The API's Profile-Update-Interval is 3 h; the floor is what the Android app applies too.
     public static let defaultUpdateMinutes: Int64 = 180
@@ -26,6 +30,15 @@ public enum Etha {
     public static let pingTimeoutSeconds = 8
     public static let connectGuard: TimeInterval = 25
     public static let testGuard: TimeInterval = 60
+
+    // The tunnel: the utun's addresses, the loopback ports when libXray names no free ones.
+    public static let tunnelMTU = 1500
+    public static let tunnelIPv4 = "198.18.0.1"
+    public static let tunnelRemoteIPv4 = "198.18.0.2"
+    public static let tunnelIPv6 = "fd00:5379:5261:7900::1"
+    public static let tunnelDNS = ["1.1.1.1"]
+    public static let socksPortFallback = 10808
+    public static let probePortFallback = 41284
 
     /// Must start with "SkyRay/" (the server records it as the customer's app) and never with "Mozilla/".
     public static func userAgent(version: String) -> String { "SkyRay/\(version) (ios)" }
