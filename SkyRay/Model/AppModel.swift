@@ -375,6 +375,35 @@ final class AppModel: ObservableObject {
                         auto: L("auto"), untested: L("ping.untested"), failed: L("ping.failed"))
     }
 
+    /// The candidates fastest first (untested, then failed, last) — Android's ServerPicker.sortedCandidates.
+    var sortedCandidates: [AutoSelect.Candidate] {
+        selection.candidates(lines).sorted { a, b in
+            func rank(_ c: AutoSelect.Candidate) -> (Int, Int64, Int) {
+                if c.delayMs > 0 { return (0, c.delayMs, c.order) }
+                return (c.delayMs == 0 ? 1 : 2, 0, c.order)
+            }
+            return rank(a) < rank(b)
+        }
+    }
+
+    func name(of lineId: String) -> String { lines.first { $0.id == lineId }?.displayName ?? lineId }
+
+    /// The server panel's value: "Auto · <line>" once Auto has picked one, the pinned line's name, or Auto.
+    var panelValue: String {
+        guard let id = selection.selectedLineId, let line = lines.first(where: { $0.id == id }) else { return L("auto") }
+        return selection.pinned ? line.displayName : L("auto.picked", line.displayName)
+    }
+
+    /// The panel's ping: the selected line's last result, 0 when none.
+    var panelDelay: Int64 { selection.selectedLineId.map { selection.delay(of: $0) } ?? 0 }
+
+    /// Under "Auto (fastest)" in the sheet: "Now <line> · <ms> ms", or what Auto does before any pick.
+    var autoNowText: String {
+        guard let id = selection.selectedLineId, let line = lines.first(where: { $0.id == id }) else { return L("auto.hint") }
+        let ms = selection.delay(of: id)
+        return L("auto.now", ms > 0 ? "\(line.displayName) · \(ms) ms" : line.displayName)
+    }
+
     /// The server field: the chosen line (Android's selected server) with its last delay, or Auto.
     var serverLabel: String {
         let id = selection.selectedLineId

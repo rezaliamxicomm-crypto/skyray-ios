@@ -8,11 +8,12 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var confirmDelete = false
     @State private var showLogs = false
+    @State private var showServers = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                NavigationLink(destination: ServerListView()) {
+                Button { showServers = true } label: {
                     row("antenna.radiowaves.left.and.right", L("server.pick"), model.serverLabel)
                 }
                 .disabled(!model.hasSubscription)
@@ -36,6 +37,7 @@ struct SettingsView: View {
             Text(L("delete.confirm"))
         }
         .sheet(isPresented: $showLogs) { LogShareSheet(urls: logURLs) }
+        .sheet(isPresented: $showServers) { ServerSheet().environmentObject(model) }
     }
 
     private var logURLs: [URL] {
@@ -76,44 +78,5 @@ struct SettingsView: View {
 
     private func open(_ string: String) {
         if let url = URL(string: string) { UIApplication.shared.open(url) }
-    }
-}
-
-/// Android's ServerPicker dialog: Auto (fastest) first, then every line with its ping, and Test again.
-struct ServerListView: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(Array(model.serverRows.enumerated()), id: \.offset) { _, row in
-                    Button {
-                        Task { await model.pick(lineId: row.id) }
-                    } label: {
-                        HStack(spacing: 16) {
-                            Image(systemName: isCurrent(row) ? "largecircle.fill.circle" : "circle")
-                                .font(.system(size: 20)).foregroundColor(isCurrent(row) ? .primaryBlue : .muted)
-                            Text(row.text).font(AppFont.row).foregroundColor(.onSurface)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(16)
-                        .contentShape(Rectangle())
-                    }
-                }
-                Button(L("test.again")) { Task { await model.testAgain() } }
-                    .buttonStyle(EthaTextButtonStyle())
-                    .disabled(model.busy)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-            }
-        }
-        .background(Color.bg.ignoresSafeArea())
-        .navigationTitle(L("server.pick"))
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func isCurrent(_ row: ServerRows.Row) -> Bool {
-        if row.id == nil { return !model.selection.pinned }
-        return model.selection.pinned && row.id == model.selection.selectedLineId
     }
 }
