@@ -10,7 +10,6 @@ public enum Etha {
     public static let subName = "EthaVPN"
     public static let supportURL = "https://t.me/Ethaconfigbot?start=app_support"
     public static let privacyURL = "https://allionapp.com/skyray-privacy"
-    public static let sourceURL = "https://github.com/rezaliamxicomm-crypto/skyray-ios"
     public static let appGroup = "group.com.allion.skyray"
     /// The extension's App ID as the previous SkyRay registered it: the phones' VPN configuration names it.
     public static let tunnelBundleID = "com.allion.skyray.PacketTunnel"

@@ -1405,29 +1405,6 @@
         }
       }
     },
-    "about.source": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Source code"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "کد منبع"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Исходный код"
-          }
-        }
-      }
-    },
     "logs.none": {
       "extractionState": "manual",
       "localizations": {
