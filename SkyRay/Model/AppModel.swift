@@ -306,9 +306,18 @@ final class AppModel: ObservableObject {
         store.updateSelection { $0.results = [:] }
         selection = store.selection
         let iface = vpn.isActive ? NetworkInterfaces.physical() : nil
+        let started = Date()
         let results = await LineTester.testAll(lines, bindInterface: iface)
         store.updateSelection { $0.results = results; $0.lastTestAt = Date() }
         selection = store.selection
+        // Every test in the log: the numbers per line, the interface the measurement was bound to (only while
+        // the tunnel is up) and how long the whole round took — the way to compare with the Android app.
+        let summary = lines.sorted { $0.order < $1.order }.map { line -> String in
+            let ms = results[line.id] ?? 0
+            return "\(line.displayName)=\(ms > 0 ? "\(ms)ms" : (ms < 0 ? "failed" : "untested"))"
+        }.joined(separator: ", ")
+        AppLog.info(String(format: "test: %d lines in %.1f s, tunnel %@, interface %@: %@", lines.count, Date().timeIntervalSince(started),
+                           vpn.isActive ? "up" : "down", iface ?? "-", summary))
     }
 
     func testAgain() async {

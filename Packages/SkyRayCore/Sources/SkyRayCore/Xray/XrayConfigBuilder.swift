@@ -17,7 +17,9 @@ public enum XrayConfigBuilder {
         /// Mux.cool: the phone's many app connections ride as substreams on a few real ones. Each real connection
         /// costs Xray TLS state, transport buffers and goroutines; a browser's burst of dozens took the extension
         /// past iOS's ~50 MiB limit on 2026-09-30, mux or not the per-byte cost is small.
-        public var mux: Bool = true
+        /// Off: on the first phone with mux the tunnel connected but nothing loaded (2026-09-30); the option stays for
+        /// a measured retry on WS lines.
+        public var mux: Bool = false
         public var muxConcurrency: Int = 8
         public init() {}
     }
