@@ -40,7 +40,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryTicks = 0
     private var lastGuardAt = Date.distantPast
     /// iOS kills the extension at about 50 MiB; Xray restarted in place (hev stays, apps reconnect) costs a second.
-    private let guardMB = 42.0
+    private let guardMB = 44.0
 
     // MARK: lifecycle
 
@@ -146,6 +146,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         reasserting = false
+        if reason == "memory guard" { log.info("xray restarted in place on \(line.remark)"); return }
         if !store.selection.pinned { store.updateSelection { $0.selectedLineId = line.id } }
         store.updateTunnelState { $0.switchedTo = line.displayName; $0.switchedAt = Date() }
         log.info("switched to \(line.remark): \(reason)")

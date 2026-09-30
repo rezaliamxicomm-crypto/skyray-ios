@@ -16,6 +16,15 @@ echo "$SHA  $TARBALL" | shasum -a 256 -c -
 rm -rf build/hev-src && mkdir -p build/hev-src
 tar -xJf "$TARBALL" -C build/hev-src --strip-components=1
 pushd build/hev-src >/dev/null
+# lwIP buffers as shipped are 64 KiB each way per TCP session (TCP_MSS 8191 × 8): with a browser's burst that is the
+# memory that took the extension to iOS's 50 MiB limit. lwIP terminates the phone's TCP locally, so a small window
+# costs nothing over the in-phone hop; 4 × 1460 caps a session at about 12 KiB.
+LWIPOPTS=third-part/lwip/src/ports/include/lwipopts.h
+grep -q '^#define TCP_MSS                         8191' "$LWIPOPTS" || { echo "lwipopts.h changed upstream: check the buffer patch"; exit 1; }
+sed -i '' -e 's/^#define TCP_MSS                         8191/#define TCP_MSS                         1460/' \
+          -e 's/^#define TCP_WND                         (8 \* TCP_MSS)/#define TCP_WND                         (4 * TCP_MSS)/' \
+          -e 's/^#define TCP_SND_BUF                     (8 \* TCP_MSS)/#define TCP_SND_BUF                     (4 * TCP_MSS)/' "$LWIPOPTS"
+grep -E '^#define (TCP_MSS|TCP_WND|TCP_SND_BUF) ' "$LWIPOPTS"
 OUT=apple
 rm -rf "$OUT" HevSocks5Tunnel.xcframework; mkdir -p "$OUT/include"
 build_static() { # sdk arch min-version-flag
