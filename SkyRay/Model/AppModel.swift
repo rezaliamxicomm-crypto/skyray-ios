@@ -322,8 +322,8 @@ final class AppModel: ObservableObject {
                            vpn.isActive ? "up" : "down", iface ?? "-", summary))
     }
 
-    /// "Ping all": every line measured, then the outcome said out loud — the fastest line (moved to, in Auto), or
-    /// that the picked line stays and how to let Auto choose. Same as the Android app.
+    /// "Ping all": every line measured, then the outcome said out loud — the fastest line (selected for the next
+    /// Connect when disconnected, announced when connected), or that the picked line stays. Same as the Android app.
     func testAgain() async {
         guard hasSubscription, phase == .idle else { return }
         phase = .finding
@@ -337,11 +337,17 @@ final class AppModel: ObservableObject {
         guard let best = best, let bestLine = lines.first(where: { $0.id == best }) else {
             banner = BannerMessage(text: L("no.line"), kind: .error); return
         }
+        // The line changes only when the customer connects (Auto picks the fastest then) or picks one by hand: a
+        // test never moves a live connection (operator's rule, 2026-09-30). Disconnected, the selection moves to
+        // the best so the next Connect uses it.
+        if best != selection.selectedLineId && vpn.isActive {
+            banner = BannerMessage(text: L("ping.faster", bestLine.displayName), kind: .ok)
+            return
+        }
         banner = BannerMessage(text: L("ping.best", bestLine.displayName), kind: .ok)
         if best != selection.selectedLineId {
             store.updateSelection { $0.selectedLineId = best }
             selection = store.selection
-            if vpn.isActive, let reply = await vpn.send(.switchTo(best)) { tunnel = reply; noticeSwitch(reply) }
         }
     }
 

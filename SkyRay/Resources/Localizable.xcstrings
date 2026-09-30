@@ -1540,6 +1540,28 @@
           }
         }
       }
+    },
+    "ping.faster": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fastest now: %@ — reconnect to switch to it"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سریع‌ترین حالا: %@؛ برای رفتن به آن، دوباره وصل شوید"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Самый быстрый сейчас: %@ — переподключитесь, чтобы перейти на него"
+          }
+        }
+      }
     }
   }
 }
