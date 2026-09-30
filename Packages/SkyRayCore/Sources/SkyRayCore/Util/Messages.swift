@@ -12,6 +12,7 @@ public struct TunnelRequest: Codable, Equatable {
     public static func logTail(_ n: Int) -> TunnelRequest { TunnelRequest(cmd: "logTail", lines: n) }
 }
 
+/// Every field optional on the wire: an older or newer tunnel's reply still decodes, and `{}` means "ok".
 public struct TunnelReply: Codable, Equatable {
     public var ok: Bool = true
     public var state: String?
@@ -26,4 +27,24 @@ public struct TunnelReply: Codable, Equatable {
     public var log: String?
     public var error: String?
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, state, lineId, lineName, lastProbeMs, lastProbeAt, footprintMB, switchedTo, switchedAt, xrayVersion, log, error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decodeIfPresent(Bool.self, forKey: .ok) ?? true
+        state = try c.decodeIfPresent(String.self, forKey: .state)
+        lineId = try c.decodeIfPresent(String.self, forKey: .lineId)
+        lineName = try c.decodeIfPresent(String.self, forKey: .lineName)
+        lastProbeMs = try c.decodeIfPresent(Int64.self, forKey: .lastProbeMs)
+        lastProbeAt = try c.decodeIfPresent(Date.self, forKey: .lastProbeAt)
+        footprintMB = try c.decodeIfPresent(Double.self, forKey: .footprintMB)
+        switchedTo = try c.decodeIfPresent(String.self, forKey: .switchedTo)
+        switchedAt = try c.decodeIfPresent(Date.self, forKey: .switchedAt)
+        xrayVersion = try c.decodeIfPresent(String.self, forKey: .xrayVersion)
+        log = try c.decodeIfPresent(String.self, forKey: .log)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
 }
