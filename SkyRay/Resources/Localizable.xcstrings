@@ -1539,6 +1539,72 @@
           }
         }
       }
+    },
+    "share.app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share this app"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اشتراک‌گذاری این اپ"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поделиться приложением"
+          }
+        }
+      }
+    },
+    "share.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send a friend the links to get SkyRay"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لینک‌های دریافت SkyRay را برای دوستانتان بفرستید"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправьте другу ссылки на SkyRay"
+          }
+        }
+      }
+    },
+    "share.text": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SkyRay — a simple VPN that works in Iran.\nAndroid: %1$@\niPhone: %2$@\nTelegram: %3$@"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اسکای‌ری (SkyRay)؛ وی‌پی‌ان ساده‌ای که در ایران کار می‌کند.\nاندروید: %1$@\nآیفون: %2$@\nتلگرام: %3$@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SkyRay — простой VPN, который работает в Иране.\nAndroid: %1$@\niPhone: %2$@\nTelegram: %3$@"
+          }
+        }
+      }
     }
   }
 }

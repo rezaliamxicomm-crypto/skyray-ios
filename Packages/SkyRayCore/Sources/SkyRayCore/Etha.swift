@@ -9,6 +9,10 @@ public enum Etha {
     public static let subPath = "/sub/"
     public static let subName = "EthaVPN"
     public static let supportURL = "https://t.me/Ethaconfigbot?start=app_support"
+    /// "Share this app": the two stores and the bot, the bot link with its own registry code
+    public static let shareURL = "https://t.me/Ethaconfigbot?start=app_share"
+    public static let playURL = "https://play.google.com/store/apps/details?id=com.allion.skyray"
+    public static let appStoreURL = "https://apps.apple.com/app/id6809038308"
     public static let privacyURL = "https://allionapp.com/skyray-privacy"
     public static let appGroup = "group.com.allion.skyray"
     /// The extension's App ID as the previous SkyRay registered it: the phones' VPN configuration names it.
