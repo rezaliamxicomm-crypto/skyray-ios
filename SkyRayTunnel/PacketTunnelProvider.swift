@@ -37,6 +37,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pathMonitor: NWPathMonitor?
     private var pathWasSatisfied = true
     private var stopping = false
+    private var memoryTicks = 0
+    private var lastGuardAt = Date.distantPast
+    /// iOS kills the extension at about 50 MiB; Xray restarted in place (hev stays, apps reconnect) costs a second.
+    private let guardMB = 42.0
 
     // MARK: lifecycle
 
@@ -195,15 +199,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startMemoryLog() {
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 5, repeating: 30)
+        t.schedule(deadline: .now() + 5, repeating: 5)
         t.setEventHandler { [weak self] in
             guard let self = self else { return }
             let mb = MemoryFootprint.currentMB()
             self.store.updateTunnelState { $0.footprintMB = mb }
+            self.memoryTicks += 1
             let s = self.hev.stats()
             let line = self.active?.remark ?? "?"
             let text = String(format: "memory %.1f MiB on %@, tx %.1f MiB rx %.1f MiB", mb, line, Double(s.txBytes) / 1_048_576, Double(s.rxBytes) / 1_048_576)
-            if mb >= 38 { self.log.warn(text) } else { self.log.info(text) }
+            if mb >= self.guardMB, let current = self.active, Date().timeIntervalSince(self.lastGuardAt) > 20 {
+                self.lastGuardAt = Date()
+                self.log.warn(text + " — memory guard: restarting xray")
+                self.switchLine(to: current, reason: "memory guard")
+            } else if mb >= 38 {
+                self.log.warn(text)
+            } else if self.memoryTicks % 6 == 1 {
+                self.log.info(text)
+            }
         }
         t.resume()
         memoryTimer = t

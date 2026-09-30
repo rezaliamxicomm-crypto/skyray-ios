@@ -14,6 +14,11 @@ public enum XrayConfigBuilder {
         public var fragmentPackets: String = "tlshello"
         public var fragmentLength: String = "100-200"
         public var fragmentInterval: String = "10-20"
+        /// Mux.cool: the phone's many app connections ride as substreams on a few real ones. Each real connection
+        /// costs Xray TLS state, transport buffers and goroutines; a browser's burst of dozens took the extension
+        /// past iOS's ~50 MiB limit on 2026-09-30, mux or not the per-byte cost is small.
+        public var mux: Bool = true
+        public var muxConcurrency: Int = 8
         public init() {}
     }
 
@@ -64,7 +69,10 @@ public enum XrayConfigBuilder {
     /// packets, a loopback HTTP inbound the watchdog probes through, Iran-direct routing, DNS split domestic/foreign.
     public static func tunnelConfig(outboundJSON: String, socksPort: Int, probePort: Int, assetDir: String, xrayLogPath: String,
                                     options: Options = Options()) throws -> String {
-        let proxy = try outbound(from: outboundJSON)
+        var proxy = try outbound(from: outboundJSON)
+        if options.mux {
+            proxy["mux"] = ["enabled": true, "concurrency": options.muxConcurrency, "xudpConcurrency": 16, "xudpProxyUDP443": "reject"]
+        }
         var outbounds = proxyOutbounds(proxy, options: options)
         outbounds.append(["tag": "direct", "protocol": "freedom", "settings": ["domainStrategy": "UseIPv4"]])
         outbounds.append(["tag": "block", "protocol": "blackhole", "settings": ["response": ["type": "http"]]])

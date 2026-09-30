@@ -40,6 +40,10 @@ final class VPNController: ObservableObject {
         m.protocolConfiguration = proto
         m.localizedDescription = "SkyRay"
         m.isEnabled = true
+        // Connect on demand: iOS restarts the tunnel by itself after a drop, a kill or a reboot — until the
+        // customer disconnects in the app, which turns it off (stop()).
+        m.onDemandRules = [NEOnDemandRuleConnect()]
+        m.isOnDemandEnabled = true
     }
 
     /// Saves the configuration (the system asks the customer once), then starts the tunnel on the line.
@@ -53,7 +57,14 @@ final class VPNController: ObservableObject {
         try m.connection.startVPNTunnel(options: ["lineId": lineId as NSString])
     }
 
-    func stop() { manager?.connection.stopVPNTunnel() }
+    func stop() {
+        guard let m = manager else { return }
+        m.isOnDemandEnabled = false
+        Task {
+            try? await m.saveToPreferences()
+            m.connection.stopVPNTunnel()
+        }
+    }
 
     func remove() async {
         if let m = manager { try? await m.removeFromPreferences() }

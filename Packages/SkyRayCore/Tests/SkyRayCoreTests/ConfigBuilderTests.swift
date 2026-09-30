@@ -12,10 +12,14 @@ final class ConfigBuilderTests: XCTestCase {
         XCTAssertEqual((c["env"] as! [String: String])["XRAY_LOCATION_ASSET"], "/assets")
         let outbounds = c["outbounds"] as! [[String: Any]]
         XCTAssertEqual(outbounds.first?["tag"] as? String, "proxy")
-        XCTAssertNil(outbounds.first?["mux"])
+        let mux = outbounds.first?["mux"] as! [String: Any]
+        XCTAssertEqual(mux["enabled"] as? Bool, true); XCTAssertEqual(mux["concurrency"] as? Int, 8)
         XCTAssertEqual(outbounds.map { $0["tag"] as! String }, ["proxy", "direct", "block", "dns-out"])
         XCTAssertFalse(s.contains("geosite:private"))
         XCTAssertFalse(s.contains("dialerProxy"))
+        var noMux = XrayConfigBuilder.Options(); noMux.mux = false
+        let plain = try json(try XrayConfigBuilder.tunnelConfig(outboundJSON: outbound, socksPort: 1, probePort: 2, assetDir: "/a", xrayLogPath: "/l", options: noMux))
+        XCTAssertNil((plain["outbounds"] as! [[String: Any]]).first?["mux"])
         let routing = c["routing"] as! [String: Any]
         XCTAssertEqual(routing["domainMatcher"] as? String, "linear")
         let rules = routing["rules"] as! [[String: Any]]
@@ -50,6 +54,7 @@ final class ConfigBuilderTests: XCTestCase {
         let plain = try json(try XrayConfigBuilder.pingConfig(outboundJSON: outbound))
         let ob = (plain["outbounds"] as! [[String: Any]])[0]
         XCTAssertEqual(ob["tag"] as? String, "proxy")
+        XCTAssertNil(ob["mux"])
         XCTAssertNil((ob["streamSettings"] as! [String: Any])["sockopt"])
         let bound = try json(try XrayConfigBuilder.pingConfig(outboundJSON: outbound, bindInterface: "en0"))
         let sockopt = ((bound["outbounds"] as! [[String: Any]])[0]["streamSettings"] as! [String: Any])["sockopt"] as! [String: Any]
