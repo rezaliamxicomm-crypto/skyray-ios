@@ -20,5 +20,5 @@ xcodebuild -project SkyRay.xcodeproj -scheme SkyRay -configuration Debug -destin
 grep -q "BUILD SUCCEEDED" build/device-build.log || { echo "the build failed: build/device-build.log has the details"; exit 1; }
 APP=build/DerivedData/Build/Products/Debug-iphoneos/SkyRay.app
 xcrun devicectl device install app --device "$DEVICE_NAME" "$APP"
-xcrun devicectl device process launch --terminate-existing --device "$DEVICE_NAME" com.allion.skyray "$@"
+xcrun devicectl device process launch --terminate-existing --device "$DEVICE_NAME" com.allion.skyray -- "$@"
 echo "DEPLOYED to $DEVICE_NAME"
