@@ -6,7 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TAG=$(sed -n 's/^tag=//p' Vendor/hev.lock); ASSET=$(sed -n 's/^asset=//p' Vendor/hev.lock); SHA=$(sed -n 's/^sha256=//p' Vendor/hev.lock)
 DEST=Packages/SkyRayHev/Vendor
-if [ -f "$DEST/HevSocks5Tunnel.xcframework/Info.plist" ] && [ "$(cat "$DEST/.tag" 2>/dev/null || true)" = "$TAG" ]; then
+# The stamp carries this script's own hash: a change to the recipe (the lwIP buffer patch, the flags) rebuilds.
+STAMP="$TAG-$(shasum -a 256 "$0" | cut -c1-12)"
+if [ -f "$DEST/HevSocks5Tunnel.xcframework/Info.plist" ] && [ "$(cat "$DEST/.tag" 2>/dev/null || true)" = "$STAMP" ]; then
   echo "hev-socks5-tunnel $TAG already in place"; exit 0
 fi
 mkdir -p "$DEST" build
@@ -51,5 +53,5 @@ xcodebuild -create-xcframework \
 popd >/dev/null
 rm -rf "$DEST/HevSocks5Tunnel.xcframework"
 mv build/hev-src/HevSocks5Tunnel.xcframework "$DEST/"
-echo "$TAG" > "$DEST/.tag"
+echo "$STAMP" > "$DEST/.tag"
 echo "hev-socks5-tunnel $TAG -> $DEST/HevSocks5Tunnel.xcframework"
