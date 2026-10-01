@@ -71,6 +71,98 @@
         }
       }
     },
+    "link.box.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add your link"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لینک خود را اضافه کنید"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте вашу ссылку"
+          }
+        }
+      }
+    },
+    "link.box.text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No link was found to paste. Paste or type it here, or open Telegram and tap your link — it opens SkyRay."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لینکی برای چسباندن پیدا نشد. آن را همین‌جا بچسبانید یا بنویسید، یا تلگرام را باز کنید و روی لینک خود بزنید؛ SkyRay باز می‌شود."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ссылка для вставки не найдена. Вставьте или введите её здесь либо откройте Telegram и нажмите на вашу ссылку — откроется SkyRay."
+          }
+        }
+      }
+    },
+    "link.box.add": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "افزودن"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить"
+          }
+        }
+      }
+    },
+    "link.box.telegram": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Telegram"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "باز کردن تلگرام"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть Telegram"
+          }
+        }
+      }
+    },
     "paste": {
       "extractionState": "manual",
       "localizations": {
@@ -1580,6 +1672,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отправьте другу ссылки на SkyRay"
+          }
+        }
+      }
+    },
+    "rate.app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rate SkyRay"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "امتیاز دادن به SkyRay"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оценить SkyRay"
+          }
+        }
+      }
+    },
+    "rate.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave a rating on the App Store"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در App Store به SkyRay امتیاز بدهید"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оставьте оценку в App Store"
           }
         }
       }

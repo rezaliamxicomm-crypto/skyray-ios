@@ -53,13 +53,15 @@ public final class SkyRayStore {
     public func updateTunnelState(_ change: (inout TunnelState) -> Void) { var s = tunnelState; change(&s); tunnelState = s }
 
     // MARK: small flags
-    private struct Flags: Codable { var deletedLink: String?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool? }
+    private struct Flags: Codable { var deletedLink: String?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt? }
     private var flags: Flags { get { read("flags.json", as: Flags.self) ?? Flags() } set { write(newValue, "flags.json") } }
     public var deletedLink: String? { get { flags.deletedLink } set { var f = flags; f.deletedLink = newValue; flags = f } }
     public var declarationAccepted: Bool { get { flags.declarationAccepted ?? false } set { var f = flags; f.declarationAccepted = newValue; flags = f } }
     public var lastRefreshAttempt: Date? { get { flags.lastRefreshAttempt } set { var f = flags; f.lastRefreshAttempt = newValue; flags = f } }
     /// The previous SkyRay's files were looked at once for the customer's link (OldAppFiles).
     public var oldAppImportTried: Bool { get { flags.oldAppImportTried ?? false } set { var f = flags; f.oldAppImportTried = newValue; flags = f } }
+    /// The rating ask's counters (RatePrompt): the phone's, not the account's — "Delete account" leaves them.
+    public var ratePrompt: RatePrompt { get { flags.rate ?? RatePrompt() } set { var f = flags; f.rate = newValue; flags = f } }
 
     /// "Delete account": the subscription, the selection and the tunnel state go; the deleted link is
     /// remembered so the clipboard import never puts it straight back; the declaration stays accepted.

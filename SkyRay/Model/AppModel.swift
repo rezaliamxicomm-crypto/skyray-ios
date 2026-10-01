@@ -1,6 +1,8 @@
 import Foundation
 import Combine
 import NetworkExtension
+import StoreKit
+import UIKit
 import SkyRayCore
 
 struct BannerMessage: Equatable {
@@ -120,8 +122,13 @@ final class AppModel: ObservableObject {
     private func statusChanged(_ status: NEVPNStatus) {
         switch status {
         case .connected:
+            let byHand = phase == .connecting   // the customer's own Connect, not the state found on opening or a reconnect by the system
             phase = .idle
-            Task { await self.probeNow(); DevTools.mirrorLogs(from: self.store) }
+            Task {
+                await self.probeNow()
+                if byHand { self.countForRating() }
+                DevTools.mirrorLogs(from: self.store)
+            }
         case .disconnected, .invalid:
             if phase == .connecting || phase == .disconnecting { phase = .idle }
             tunnel = nil
@@ -140,6 +147,23 @@ final class AppModel: ObservableObject {
 
     private func probeNow() async {
         if let reply = await vpn.send(.probe) { tunnel = reply; noticeSwitch(reply) }
+    }
+
+    /// A connection the customer made that works (its probe came back with a time) counts towards the rating
+    /// ask (RatePrompt). When one is due, iOS shows its own card — stars and "Not Now"; Apple allows no other
+    /// prompt, shows it at most three times a year and never in a TestFlight build.
+    private func countForRating() {
+        guard let reply = tunnel, let ms = reply.lastProbeMs, ms > 0,
+              let at = reply.lastProbeAt, Date().timeIntervalSince(at) < 60 else { return }   // this connection's probe, not a stored one
+        var prompt = store.ratePrompt
+        let due = prompt.connected()
+        let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
+        if due, scene != nil { prompt.asked() }
+        store.ratePrompt = prompt
+        if due, let scene = scene {
+            AppLog.info("rating: asked (\(prompt.asks) of \(RatePrompt.maxAsks))")
+            SKStoreReviewController.requestReview(in: scene)
+        }
     }
 
     private func noticeSwitch(_ reply: TunnelReply) {

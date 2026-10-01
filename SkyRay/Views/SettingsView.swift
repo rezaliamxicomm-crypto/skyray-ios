@@ -22,6 +22,7 @@ struct SettingsView: View {
                 }
                 Button { showLogs = true } label: { row("doc.text", L("send.logs"), L("send.logs.hint")) }
                 Button { share() } label: { row("square.and.arrow.up", L("share.app"), L("share.hint")) }
+                Button { rate() } label: { row("star", L("rate.app"), L("rate.hint")) }
                 NavigationLink(destination: AboutView()) { row("info.circle", L("about"), nil) }
                 Button { open(Etha.privacyURL) } label: { row("hand.raised", L("privacy"), nil) }
                 Button { confirmDelete = true } label: { row("trash", L("delete.account"), L("delete.hint")) }
@@ -74,6 +75,14 @@ struct SettingsView: View {
         sheet.popoverPresentationController?.sourceView = top.view   // iPad anchors the sheet
         sheet.popoverPresentationController?.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 1, height: 1)
         top.present(sheet, animated: true)
+    }
+
+    /// The App Store's page for writing a review; the customer went there by themselves, so the app never asks after this.
+    private func rate() {
+        var prompt = model.store.ratePrompt
+        prompt.done = true
+        model.store.ratePrompt = prompt
+        open(Etha.reviewURL)
     }
 
     private func open(_ string: String) {

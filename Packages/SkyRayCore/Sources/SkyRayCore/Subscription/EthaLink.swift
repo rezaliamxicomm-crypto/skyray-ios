@@ -48,8 +48,10 @@ public enum EthaLink {
     public static func extract(from text: String?) -> String? {
         guard let text = text else { return nil }
         let trailing: Set<Character> = [".", ",", ")", "]", "؛", "،"]
+        let invisible = Set("\u{200B}\u{200C}\u{200D}\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}\u{FEFF}".unicodeScalars)
         for piece in text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }) {
-            var t = String(piece)
+            // the direction and joining marks a right-to-left message leaves around a copied link: not spaces, never part of a link
+            var t = String(String.UnicodeScalarView(piece.unicodeScalars.filter { !invisible.contains($0) }))
             while let last = t.last, trailing.contains(last) { t.removeLast() }
             if let link = normalized(t) { return link }
         }

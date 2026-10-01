@@ -11,8 +11,12 @@ public enum Etha {
     public static let supportURL = "https://t.me/Ethaconfigbot?start=app_support"
     /// "Share this app": the two stores and the bot, the bot link with its own registry code
     public static let shareURL = "https://t.me/Ethaconfigbot?start=app_share"
+    /// "Open Telegram" in the add-your-link box (Paste found no link): the bot answers with the customer's link message
+    public static let linkURL = "https://t.me/Ethaconfigbot?start=app_link"
     public static let playURL = "https://play.google.com/store/apps/details?id=com.allion.skyray"
     public static let appStoreURL = "https://apps.apple.com/app/id6809038308"
+    /// "Rate SkyRay" (Settings): the App Store's own page for writing a review
+    public static let reviewURL = appStoreURL + "?action=write-review"
     public static let privacyURL = "https://allionapp.com/skyray-privacy"
     public static let appGroup = "group.com.allion.skyray"
     /// The extension's App ID as the previous SkyRay registered it: the phones' VPN configuration names it.

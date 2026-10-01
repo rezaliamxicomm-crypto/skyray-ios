@@ -1,11 +1,18 @@
 import SwiftUI
 import SkyRayCore
 
-/// The hero: a 150 pt Connect disc inside a halo that breathes while connected, the state in 22 pt bold, the hint
-/// (or, connected, the chip with the server and its probe) — Android's `hero`.
+/// The hero: a 150 pt Connect disc inside a halo that breathes while connected, the state in 22 pt bold, and one
+/// line under it — the hint, connected the chip with the server and its probe, busy the spinner — Android's `hero`.
+/// It takes the height the phone has to spare (HomeView): the block sits in the middle of it and the disc with its
+/// halo grows with it, up to 12 % at 160 pt to spare (168 pt, the design's tall-phone hero). The line under the
+/// state lives in a slot as tall as the hint's two lines whatever it shows, so the block's height never changes and
+/// the Connect button never moves under the finger.
 struct HeroView: View {
     @EnvironmentObject private var model: AppModel
     @State private var breathing = false
+    @State private var spare: CGFloat = 0   // the height left over on this phone, all of it the hero's
+
+    private var grow: CGFloat { 1 + 0.12 * min(1, max(0, spare) / 160) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,34 +27,43 @@ struct HeroView: View {
                 ConnectButton()
             }
             .frame(width: 204, height: 204)
+            .scaleEffect(grow)   // drawn larger, laid out the same: the halo's clear rim is what reaches past the box
             Text(model.stateText)
                 .font(AppFont.headline).foregroundColor(.onSurface)
                 .multilineTextAlignment(.center)
                 .padding(.top, 14)
-            if model.isConnected, let chip = chipText {
-                HStack(spacing: 6) {
-                    Circle().fill(Color.greenLight).frame(width: 8, height: 8)
-                    Text(chip).font(AppFont.chip).foregroundColor(.greenLight)
+            ZStack(alignment: .top) {
+                Text("0\n0").font(AppFont.hint).lineSpacing(4).padding(.top, 4).hidden()   // the slot: the hint's two lines
+                if model.busy {
+                    ProgressView().tint(.blueLight).frame(height: 24).padding(.top, 8)
+                } else if model.isConnected {
+                    if let chip = chipText {
+                        HStack(spacing: 6) {
+                            Circle().fill(Color.greenLight).frame(width: 8, height: 8)
+                            Text(chip).font(AppFont.chip).foregroundColor(.greenLight).lineLimit(1)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Color.connectOn.opacity(0.12))
+                        .overlay(Capsule().stroke(Color.connectOn.opacity(0.25), lineWidth: 1))
+                        .clipShape(Capsule())
+                        .padding(.top, 8)
+                    }
+                } else {
+                    Text(model.selection.pinned ? L("tap.connect") : L("tap.connect") + "\n" + L("auto.hint"))
+                        .font(AppFont.hint).foregroundColor(.muted)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .padding(.top, 4)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(Color.connectOn.opacity(0.12))
-                .overlay(Capsule().stroke(Color.connectOn.opacity(0.25), lineWidth: 1))
-                .clipShape(Capsule())
-                .padding(.top, 8)
-            } else if !model.isConnected {
-                Text(model.selection.pinned ? L("tap.connect") : L("tap.connect") + "\n" + L("auto.hint"))
-                    .font(AppFont.hint).foregroundColor(.muted)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(4)
-                    .padding(.top, 4)
-            }
-            if model.busy {
-                ProgressView().tint(.blueLight).frame(height: 24).padding(.top, 8)
             }
         }
-        .frame(maxWidth: .infinity)
+        // the block is centred in the hero's height: twice its distance from the top is what the phone has to spare
+        .background(GeometryReader { g in Color.clear.preference(key: SpareHeight.self, value: 2 * g.frame(in: .named("hero")).minY) })
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .coordinateSpace(name: "hero")
         .padding(.top, 18)
         .padding(.bottom, 14)
+        .onPreferenceChange(SpareHeight.self) { spare = $0.rounded() }
         .onAppear { breathe(model.isConnected) }
         .onChange(of: model.isConnected) { breathe($0) }
     }
@@ -67,6 +83,11 @@ struct HeroView: View {
         let ms = (model.tunnel?.lastProbeMs).flatMap { $0 > 0 ? $0 : nil } ?? model.selection.delay(of: line.id)
         return ms > 0 ? "\(name) · \(ms) ms" : name
     }
+}
+
+private struct SpareHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// The round Connect button: 150 pt, blue, green once connected, Material's power glyph.
