@@ -77,7 +77,7 @@ struct AccountCard: View {
         let used = Self.format(bytes: max(0, info.download) + max(0, info.upload))
         if info.total < 0 { return ("–", L("data.unknown")) }
         if info.total == 0 { return (used, L("data.unlimited")) }
-        return (used, L("data.of", Self.format(bytes: info.total)))
+        return (used, L("data.of", SubscriptionHeaders.quotaText(bytes: info.total)))
     }
 
     private var dataFraction: Double? {

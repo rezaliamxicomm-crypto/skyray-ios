@@ -147,4 +147,14 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertFalse(SubscriptionHeaders.isStale(now.addingTimeInterval(-3599.999), now: now))
         XCTAssertFalse(SubscriptionHeaders.isStale(now, now: now))
     }
+    func testQuotaTextDropsTheDecimalOfAWholeNumber() {
+        let gb: Int64 = 1 << 30
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: 120 * gb), "120 GB")
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: Int64(70.2 * Double(gb))), "70.2 GB")
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: 120 * gb - 1), "120 GB")     // 119.99… reads 120, never 120.0
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: gb), "1 GB")
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: gb + gb / 2), "1.5 GB")
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: 214_748_365), "205 MB")     // the trial's 0.2 GB
+        XCTAssertEqual(SubscriptionHeaders.quotaText(bytes: 512 * 1024), "512 KB")
+    }
 }

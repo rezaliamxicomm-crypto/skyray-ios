@@ -58,6 +58,18 @@ public enum SubscriptionHeaders {
         return (seconds + 86399) / 86400
     }
 
+    /// The allowance on the data tile: "120 GB", "70.2 GB" — one decimal, dropped when it would be ".0" (the used
+    /// figure beside it keeps its decimal); under 1 GB whole MB, then KB. Android's EthaSubscription.quotaText.
+    public static func quotaText(bytes: Int64) -> String {
+        if bytes >= 1 << 30 {
+            let tenths = (Double(bytes) / 1_073_741_824 * 10).rounded()
+            let whole = tenths.truncatingRemainder(dividingBy: 10) == 0
+            return String(format: whole ? "%.0f GB" : "%.1f GB", tenths / 10)
+        }
+        if bytes >= 1 << 20 { return String(format: "%.0f MB", Double(bytes) / 1_048_576) }
+        return String(format: "%.0f KB", Double(bytes) / 1024)
+    }
+
     public static func isStale(_ fetchedAt: Date?, now: Date = Date(), maxAge: TimeInterval = Etha.staleAfter) -> Bool {
         guard let fetchedAt = fetchedAt, fetchedAt.timeIntervalSince1970 > 0 else { return true }
         return now.timeIntervalSince(fetchedAt) >= maxAge
