@@ -72,7 +72,9 @@ final class EchFetchTests: XCTestCase {
         XCTAssertEqual(key[2], 0xFE); XCTAssertEqual(key[3], 0x0D)
         XCTAssertFalse(Etha.echResolvers.isEmpty)
         XCTAssertEqual(EchFetch.candidateAddresses(Etha.echResolvers).count, min(Etha.echResolvers.count, EchFetch.maxStoredAddresses))   // resolvers are IPv4 literals
-        for address in Etha.echAddresses { XCTAssertEqual(EchFetch.candidateAddresses([address]), [address]) }
+        // the pinned list: IPv4 addresses, then one name for the phone's resolver (a network without IPv4 reaches only a name)
+        for address in Etha.echAddresses.dropLast() { XCTAssertEqual(EchFetch.candidateAddresses([address]), [address]) }
+        XCTAssertEqual(Etha.echAddresses.last, Etha.echLookupName)
         XCTAssertNotEqual(Etha.echLookupName, Etha.subHost)             // the link host is never put into a DNS query
     }
 
