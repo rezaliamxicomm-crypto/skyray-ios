@@ -11,8 +11,8 @@ What leaves your phone because the service cannot work without it:
 - The subscription link you added is fetched from the EthaVPN server (every few hours, and when you tap
   Refresh). That request carries the app's name and version (`SkyRay/<version> (ios)`). The server records
   the time of the last fetch per subscription so that support can tell whether your app has received the
-  servers. The link is fetched with Encrypted Client Hello, so its address is not visible on the way; for
-  that the app asks three public DNS services (Google, Cloudflare, Quad9) for Cloudflare's public
+  servers. The link is fetched with Encrypted Client Hello, so its address is not visible on the way (only
+  when that gets no answer is it fetched as an ordinary request); for that the app asks three public DNS services (Google, Cloudflare, Quad9) for Cloudflare's public
   encryption key — a question that names Cloudflare, not you and not your link.
 - Your VPN traffic goes to the EthaVPN servers. What the servers keep is described by the service, not by
   this app; the app adds nothing to it.
@@ -31,7 +31,7 @@ The full policy: https://allionapp.com/skyray-privacy
 
 آنچه از گوشی شما خارج می‌شود چون سرویس بدون آن کار نمی‌کند: لینک اشتراک هر چند ساعت (و با زدن
 بروزرسانی) از سرور EthaVPN گرفته می‌شود و این درخواست نام و نسخه‌ی برنامه را همراه دارد (لینک با Encrypted
-Client Hello گرفته می‌شود تا نشانی آن در مسیر دیده نشود؛ برای این کار برنامه کلید عمومی Cloudflare را از سه
+Client Hello گرفته می‌شود تا نشانی آن در مسیر دیده نشود، و فقط اگر این راه پاسخی نگیرد با یک درخواست معمولی؛ برای این کار برنامه کلید عمومی Cloudflare را از سه
 سرویس DNS عمومی — گوگل، Cloudflare و Quad9 — می‌پرسد، پرسشی که نام Cloudflare را دارد، نه شما و نه لینک شما)؛ ترافیک VPN شما به
 سرورهای EthaVPN می‌رود؛ دکمه‌ی پشتیبانی ربات تلگرام را باز می‌کند.
 

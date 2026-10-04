@@ -47,9 +47,9 @@ public enum Etha {
     public static let socksPortFallback = 10808
     public static let probePortFallback = 41284
 
-    // Our own link is fetched in one way only: with Encrypted Client Hello enforced (EchFetch → LibXray's
-    // CGoFetchSubscriptionEch, echfetch/ in this repo) — never with the link host's name in the clear, past the tunnel
-    // or through it. The ECH key (Cloudflare's configuration, one for every zone) is asked over plain UDP DNS of these
+    // Our own link is fetched with Encrypted Client Hello enforced (EchFetch → LibXray's CGoFetchSubscriptionEch,
+    // echfetch/ in this repo), past the tunnel and then through it; only when nobody answered on either way is it
+    // fetched once more without ECH, the last resort (SubscriptionImporter). The ECH key (Cloudflare's configuration, one for every zone) is asked over plain UDP DNS of these
     // resolvers, all at once, as the HTTPS record of the ECH public name — what the lines' own ECH lookups ask; when
     // none answers, the pinned key is offered and the server's retry key replaces it. The connection goes to a
     // Cloudflare address the app already knows — the stored lines' addresses, then these pinned ones — never to the

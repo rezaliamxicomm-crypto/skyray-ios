@@ -47,9 +47,10 @@ CI (`.github/workflows/ios.yml`) builds every push to `main` and to a `claude/�
 tests, then both targets; unsigned until the signing secrets exist) and uploads tags to TestFlight. A failed run posts
 its errors as a comment on the commit and as annotations on the check.
 
-**The link is fetched in one way only: with Encrypted Client Hello enforced** (`SubscriptionImporter` → `EchFetch` →
-`LibXrayBridge.fetchSubscriptionEch`). The link host's name is never stated in the clear, and when ECH is not possible
-the link is not fetched. The ECH key is asked over plain UDP DNS of public resolvers (the HTTPS record of the ECH
+**The link is fetched with Encrypted Client Hello enforced** (`SubscriptionImporter` → `EchFetch` →
+`LibXrayBridge.fetchSubscriptionEch`): the link host's name is not stated in the clear. Only when nobody answered that
+way is the link fetched once more as before 1.3.6, by URLSession without ECH — the last resort for a network that
+blocks ECH itself. The ECH key is asked over plain UDP DNS of public resolvers (the HTTPS record of the ECH
 public name), or is the pinned key, which the server's retry key refreshes; the connection goes to a Cloudflare address
 the app already knows, never to the host's A record. While the tunnel is up: first past it, bound to the phone's own
 interface, then through it. Apple's own networking cannot be made to enforce ECH, and one process holds one Go runtime,

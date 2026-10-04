@@ -6,8 +6,9 @@ import SkyRayXray
 /// Fetches the customer's link, reads the headers, turns every vless line into an Xray outbound (libXray,
 /// in this process) and writes the snapshot the tunnel reads.
 ///
-/// The link is fetched in one way only: with Encrypted Client Hello enforced (the core's fetch, EchFetch) — its
-/// host's name is never stated in the clear, and when ECH is not possible the link is not fetched.
+/// The link is fetched with Encrypted Client Hello enforced (the core's fetch, EchFetch): its host's name is not
+/// stated in the clear. Only when nobody answered that way is it fetched once more as before 1.3.6, by URLSession
+/// without ECH — the operator's last resort for a network that blocks ECH itself.
 struct SubscriptionImporter {
     let store: SkyRayStore
 
@@ -46,18 +47,55 @@ struct SubscriptionImporter {
             }
             AppLog.warn("fetch: ECH \(way.name) gave nothing: \(result?.failure ?? "no result from the core")")
         }
-        guard let result = answer else { throw FetchError.network }
-        switch result.status {
+        if let result = answer {
+            return try Self.read(status: result.status, headers: result.headers, body: Data(result.body.utf8))
+        }
+        // Nobody answered with ECH on any way: the last resort, the link fetched as every version before 1.3.6 did.
+        AppLog.warn("fetch: ECH got no answer, fetching without it (the last resort)")
+        let plain = try await Self.fetchPlain(url)
+        AppLog.info("fetch: without ECH, status \(plain.status)")
+        return try Self.read(status: plain.status, headers: plain.headers, body: plain.body)
+    }
+
+    /// The server's answer as the app reads it: the subscription, or what is wrong with the link.
+    private static func read(status: Int, headers: [String: String], body: Data) throws -> (info: SubscriptionInfo, links: [String]) {
+        switch status {
         case 200: break
         case 403: throw FetchError.expired
         case 404: throw FetchError.unknownLink
-        default: throw FetchError.http(result.status)
+        default: throw FetchError.http(status)
         }
         var info = SubscriptionInfo()
-        SubscriptionHeaders.apply(result.headers, to: &info)
-        let links = SubscriptionBody.decode(Data(result.body.utf8))
+        SubscriptionHeaders.apply(headers, to: &info)
+        let links = SubscriptionBody.decode(body)
         if links.isEmpty { throw FetchError.emptyBody }
         return (info, links)
+    }
+
+    /// The fetch as it was before 1.3.6: URLSession, the host's name in the clear. Only after ECH got no answer.
+    private static func fetchPlain(_ link: String) async throws -> (status: Int, headers: [String: String], body: Data) {
+        guard let url = URL(string: link) else { throw FetchError.unknownLink }
+        var request = URLRequest(url: url)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForResource = 25
+        let session = URLSession(configuration: config)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw FetchError.network
+        }
+        guard let http = response as? HTTPURLResponse else { throw FetchError.network }
+        var headers: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let k = key as? String, let v = value as? String { headers[k.lowercased()] = v }
+        }
+        return (http.statusCode, headers, data)
     }
 
     /// The core's fetch blocks until its answer or its timeout: off the main thread.

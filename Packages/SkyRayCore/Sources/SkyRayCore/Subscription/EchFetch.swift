@@ -66,8 +66,9 @@ public struct EchFetchResult: Equatable {
     }
 }
 
-/// Our own link is fetched in one way only: with Encrypted Client Hello enforced. The pure half of it — which
-/// addresses to offer and what to ask for; the call itself is LibXrayBridge.fetchSubscriptionEch.
+/// Our own link is fetched with Encrypted Client Hello enforced. The pure half of it — which addresses to offer
+/// and what to ask for; the call itself is LibXrayBridge.fetchSubscriptionEch, and what follows when nobody answered
+/// (one last fetch without ECH) is SubscriptionImporter's.
 public enum EchFetch {
     /// Dead addresses cost a dial timeout each before the pinned ones get their turn.
     public static let maxStoredAddresses = 3
