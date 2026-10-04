@@ -47,7 +47,12 @@ Rollback: submit the previous build again (builds stay in App Store Connect); ph
 
 ## Bumping the native libraries
 
-libXray: change `tag` and `sha256` in `Vendor/libxray.lock` (`shasum -a 256` of the release's `libxray-apple-cgo.zip`),
-re-read its README against `docs/libxray-api.md`. hev-socks5-tunnel: `tag`, `asset` and `sha256` in `Vendor/hev.lock`
+libXray is built by this repository (`.github/workflows/libxray.yml`), because the subscription fetch with Encrypted
+Client Hello is compiled into it (`echfetch/`, `libxray/echfetch_export.go`). To move to another libXray: change `tag`,
+`commit` and `go` in `Vendor/libxray-source.lock` and push; the workflow runs the Go tests, builds every slice
+upstream builds and publishes `libxray-apple-cgo.zip` as a release named `libxray-<tag>-ech-<hash of the inputs>` (a
+change to `echfetch/` alone does the same). Then put that release's name, the zip's address and its sha256 (in the
+release notes; check it with `shasum -a 256` of the download) into `Vendor/libxray.lock`, and re-read upstream's
+README against `docs/libxray-api.md`. `echfetch/` is the same in the Android repository: change it in both. hev-socks5-tunnel: `tag`, `asset` and `sha256` in `Vendor/hev.lock`
 (the release's `.tar.xz`). Then push, and re-run the device checklist: connect on a WS line and an XHTTP line, watch
 `tunnel.log`'s memory lines.

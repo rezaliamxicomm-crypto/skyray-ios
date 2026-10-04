@@ -5,6 +5,9 @@ import SkyRayXray
 
 /// Fetches the customer's link, reads the headers, turns every vless line into an Xray outbound (libXray,
 /// in this process) and writes the snapshot the tunnel reads.
+///
+/// The link is fetched in one way only: with Encrypted Client Hello enforced (the core's fetch, EchFetch) — its
+/// host's name is never stated in the clear, and when ECH is not possible the link is not fetched.
 struct SubscriptionImporter {
     let store: SkyRayStore
 
@@ -23,38 +26,48 @@ struct SubscriptionImporter {
     }
 
     func fetch(_ link: String) async throws -> (info: SubscriptionInfo, links: [String]) {
-        guard let url = URL(string: EthaLink.canonical(link)) else { throw FetchError.unknownLink }
-        var request = URLRequest(url: url)
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("*/*", forHTTPHeaderField: "Accept")
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 20
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForResource = 40
-        let session = URLSession(configuration: config)
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw FetchError.network
+        let url = EthaLink.canonical(link)
+        guard URL(string: url) != nil else { throw FetchError.unknownLink }
+        let stored = EchFetch.storedAddresses(lines: store.loadSnapshot()?.lines ?? [], selectedLineId: store.selection.selectedLineId)
+        // While our tunnel is up the app's own traffic runs through it. First past it, bound to the phone's own
+        // interface — that way does not depend on the line that is connected; when nobody answers, through the tunnel.
+        var ways: [(interface: String, timeoutMs: Int64, name: String)] = [("", EchFetch.timeoutMs, "directly")]
+        if NetworkInterfaces.tunnelIsUp(), let physical = NetworkInterfaces.physical() {
+            ways = [(physical, EchFetch.timeoutMs, "past the tunnel (\(physical))"), ("", EchFetch.secondWayTimeoutMs, "through the tunnel")]
         }
-        guard let http = response as? HTTPURLResponse else { throw FetchError.network }
-        switch http.statusCode {
+        var answer: EchFetchResult?
+        for way in ways {
+            let request = EchFetch.request(url: url, stored: stored, userAgent: Self.userAgent, interface: way.interface, timeoutMs: way.timeoutMs)
+            let result = await Self.run(request)
+            if let result, result.answered {
+                AppLog.info("fetch: ECH \(way.name) via \(result.address) (key: \(result.keySource)), status \(result.status)")
+                answer = result
+                break   // the server answered, whatever it said: another way out would hear the same
+            }
+            AppLog.warn("fetch: ECH \(way.name) gave nothing: \(result?.failure ?? "no result from the core")")
+        }
+        guard let result = answer else { throw FetchError.network }
+        switch result.status {
         case 200: break
         case 403: throw FetchError.expired
         case 404: throw FetchError.unknownLink
-        default: throw FetchError.http(http.statusCode)
-        }
-        var headers: [String: String] = [:]
-        for (key, value) in http.allHeaderFields {
-            if let k = key as? String, let v = value as? String { headers[k.lowercased()] = v }
+        default: throw FetchError.http(result.status)
         }
         var info = SubscriptionInfo()
-        SubscriptionHeaders.apply(headers, to: &info)
-        let links = SubscriptionBody.decode(data)
+        SubscriptionHeaders.apply(result.headers, to: &info)
+        let links = SubscriptionBody.decode(Data(result.body.utf8))
         if links.isEmpty { throw FetchError.emptyBody }
         return (info, links)
+    }
+
+    /// The core's fetch blocks until its answer or its timeout: off the main thread.
+    private static func run(_ request: EchFetchRequest) async -> EchFetchResult? {
+        guard let json = request.json() else { return nil }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: EchFetchResult.parse(LibXrayBridge.fetchSubscriptionEch(json)))
+            }
+        }
     }
 
     /// vless links → Line values with their Xray outbound JSON. libXray is blocking: off the main thread.

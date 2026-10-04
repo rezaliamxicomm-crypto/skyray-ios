@@ -47,6 +47,20 @@ public enum LibXrayBridge {
         throw LibXrayError.failed((response["error"] as? String) ?? String(text.prefix(200)))
     }
 
+    /// The subscription fetch with Encrypted Client Hello enforced (echfetch/echfetch.go, compiled into this LibXray
+    /// as CGoFetchSubscriptionEch): a JSON request in, a JSON result out — SkyRayCore's EchFetchRequest / EchFetchResult.
+    /// Blocks until the answer or the request's timeout: run it off the main thread. It does not touch the managed
+    /// Xray instance and does not wait for `invoke`'s lock.
+    public static func fetchSubscriptionEch(_ requestJSON: String) -> String {
+        requestJSON.withCString { cString -> String in
+            guard let copy = strdup(cString) else { return "" }
+            defer { free(copy) }
+            guard let out = CGoFetchSubscriptionEch(copy) else { return "" }
+            defer { CGoFree(out) }
+            return String(cString: out)
+        }
+    }
+
     public static func runXray(configJSON: String) throws { try invoke("runXray", payload: ["xrayJson": configJSON]) }
     public static func stopXray() throws { try invoke("stopXray") }
 

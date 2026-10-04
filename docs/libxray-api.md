@@ -19,4 +19,10 @@ Envelopes are limited to 16 MiB. A top-level `env` in the request is ignored: Xr
 | `pingBatch` | `{"configs": [{"xrayJson": …, "outboundTag": "proxy"}…] (≤ 5), "timeout": s, "url": …}` | one result per config, `delay` ms: 10000 = error, 11000 = timeout; refuses while `runXray` is active in the same process |
 | `testXray` | `{"xrayJson": …}` | `{}` — builds and closes a temporary instance |
 
+**Ours, compiled into the same library** (`echfetch/`, `libxray/echfetch_export.go`; not in upstream's release):
+`char* CGoFetchSubscriptionEch(char* requestJSON)` — the subscription fetch with Encrypted Client Hello enforced.
+Request `{"url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs",
+"interface"}` → result `{"status", "headers", "body", "echAccepted", "address", "keySource", "error"}` (no envelope;
+`error` is empty on an answer). Freed with `CGoFree`. Blocks up to `timeoutMs`; independent of the managed instance.
+
 Memory: on iOS a GC runs once a second. `SetDNS`/`ResetDNS` exist only in the Android artifact.

@@ -47,6 +47,19 @@ public enum Etha {
     public static let socksPortFallback = 10808
     public static let probePortFallback = 41284
 
+    // Our own link is fetched in one way only: with Encrypted Client Hello enforced (EchFetch → LibXray's
+    // CGoFetchSubscriptionEch, echfetch/ in this repo) — never with the link host's name in the clear, past the tunnel
+    // or through it. The ECH key (Cloudflare's configuration, one for every zone) is asked over plain UDP DNS of these
+    // resolvers, all at once, as the HTTPS record of the ECH public name — what the lines' own ECH lookups ask; when
+    // none answers, the pinned key is offered and the server's retry key replaces it. The connection goes to a
+    // Cloudflare address the app already knows — the stored lines' addresses, then these pinned ones — never to the
+    // host's A record. Both pinned values are what DNS said on 2026-10-04; stale is fine. The same values as the
+    // Android app's AppConfig.ETHA_ECH_*.
+    public static let echResolvers = ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
+    public static let echLookupName = "cloudflare-ech.com"
+    public static let echAddresses = ["104.21.67.176", "172.67.179.3"]
+    public static let echPinnedKey = "AEX+DQBB+AAgACD1pZvdD5sHHANMZyCYm0HK9WMgj+BzRP7oSbbFgbGsNQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
+
     /// Must start with "SkyRay/" (the server records it as the customer's app) and never with "Mozilla/".
     public static func userAgent(version: String) -> String { "SkyRay/\(version) (ios)" }
 }

@@ -1,4 +1,7 @@
-# libXray release pinned for SkyRay iOS (scripts/fetch-libxray.sh verifies the zip against this)
-tag=v26.9.9
+# LibXray for SkyRay iOS: XTLS/libXray built by this repository (.github/workflows/libxray.yml, from
+# Vendor/libxray-source.lock) with the subscription fetch with Encrypted Client Hello compiled in (echfetch/).
+# scripts/fetch-libxray.sh downloads the release's zip and verifies it against this sha256.
+tag=libxray-v26.9.9-ech-3d279b37a6
+url=https://github.com/rezaliamxicomm-crypto/skyray-ios/releases/download/libxray-v26.9.9-ech-3d279b37a6/libxray-apple-cgo.zip
 asset=libxray-apple-cgo.zip
-sha256=84a11f0923efb65be7631b3c4cac75bd4351fc13b9cc2394def6af5c1696e9fa
+sha256=540b9a8111075d0e037f3ec76034f27d3f526015cda5cf3d7db4fb9058d2c0c5
