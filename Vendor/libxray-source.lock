@@ -1,0 +1,5 @@
+# What LibXray.xcframework is built from (scripts/build-libxray.sh, run by .github/workflows/libxray.yml):
+# XTLS/libXray at this tag — the commit is checked — with echfetch/ compiled into its C bridge, by this Go.
+tag=v26.9.9
+commit=50b95979f5db551bd273165cf469e5daaf791341
+go=1.27.1

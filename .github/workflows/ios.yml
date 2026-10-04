@@ -7,7 +7,7 @@ name: iOS
 # on the check and as a comment on the commit.
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]   # claude/…: work in progress pushed from the server, which cannot start a run by hand
     tags: ["v*"]
   workflow_dispatch:
     inputs:
