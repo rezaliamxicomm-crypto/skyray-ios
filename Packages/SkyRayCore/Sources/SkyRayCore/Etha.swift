@@ -6,6 +6,15 @@ public enum Etha {
     public static let subHost = "fra.skyrayconfig.org"
     public static let subHosts = [subHost]
     public static let oldSubHosts = ["fra.mobileiphonez.org", "fra.mobileiphone.org"]
+    /// The link hop inside Iran: the service's second address for the link, for networks that filter the link host's
+    /// name. A link on one of these names is ours too (moved to subHost like one on an old address). The fetch takes
+    /// the hop after the two ECH ways gave nothing: plain, by the core, dialled at the address the service last named
+    /// in the header X-Etha-Link-Hops ("host=ip,host=ip"), else at linkHops — so the spare name can take over without
+    /// a release. The same values as the Android app's AppConfig.ETHA_HOP_SUB_HOSTS / ETHA_LINK_HOPS.
+    public static let hopSubHosts = ["www.harlow-systems.org", "harlow-systems.org", "www.selvanemetricsz.com", "selvanemetricsz.com"]
+    public static let linkHops = [LinkHop(host: "www.harlow-systems.org", ip: "185.83.210.148")]
+    public static let linkHopsHeader = "x-etha-link-hops"
+    public static let hopTimeoutMs: Int64 = 12_000
     public static let subPath = "/sub/"
     public static let subName = "EthaVPN"
     public static let supportURL = "https://t.me/Ethaconfigbot?start=app_support"
@@ -48,8 +57,9 @@ public enum Etha {
     public static let probePortFallback = 41284
 
     // Our own link is fetched with Encrypted Client Hello enforced (EchFetch → LibXray's CGoFetchSubscriptionEch,
-    // echfetch/ in this repo), past the tunnel and then through it; only when nobody answered on either way is it
-    // fetched once more without ECH, the last resort (SubscriptionImporter). The ECH key (Cloudflare's configuration, one for every zone) is asked over plain UDP DNS of these
+    // echfetch/ in this repo), past the tunnel and then through it; when nobody answered on either way, through the
+    // link hop inside Iran (plain, linkHops); only when that gave nothing either is it fetched once more without ECH
+    // by name, the last resort (SubscriptionImporter). The ECH key (Cloudflare's configuration, one for every zone) is asked over plain UDP DNS of these
     // resolvers, all at once, as the HTTPS record of the ECH public name — what the lines' own ECH lookups ask; when
     // none answers, the pinned key is offered and the server's retry key replaces it. The connection goes to a
     // Cloudflare address the app already knows — the stored lines' addresses, then these pinned ones — never to the

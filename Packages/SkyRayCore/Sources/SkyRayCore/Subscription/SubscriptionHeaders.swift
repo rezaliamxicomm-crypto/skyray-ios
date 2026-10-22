@@ -94,6 +94,11 @@ public enum SubscriptionHeaders {
         if let raw = headers["profile-web-page-url"] {
             let t = raw.trimmingCharacters(in: .whitespaces); info.webPageURL = t.isEmpty ? nil : t; seen = true
         }
+        if let raw = headers[Etha.linkHopsHeader] {
+            let hops = EchFetch.parseHops(raw)
+            if !hops.isEmpty { info.linkHops = EchFetch.format(hops) }   // a header with no valid entry changes nothing
+            seen = true
+        }
         if let raw = headers["profile-update-interval"] {
             if let m = updateIntervalMinutes(raw) { info.updateIntervalMinutes = m }
             seen = true

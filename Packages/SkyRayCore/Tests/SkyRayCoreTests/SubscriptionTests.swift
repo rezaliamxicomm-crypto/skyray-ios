@@ -95,6 +95,14 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertFalse(EthaLink.sameAccount(nil, old))
         XCTAssertFalse(EthaLink.sameAccount(old, nil))
     }
+    func testHopLinksMoveToTheCurrentAddressToo() {
+        XCTAssertEqual(EthaLink.migratedUrl("https://www.harlow-systems.org/sub/0123456789abcdef"), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
+        XCTAssertEqual(EthaLink.normalized("https://harlow-systems.org/sub/0123456789abcdef#N"), "https://fra.skyrayconfig.org/sub/0123456789abcdef#N")
+        XCTAssertEqual(EthaLink.extract(from: "لینک: https://www.harlow-systems.org/sub/0123456789abcdef ."), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
+        XCTAssertFalse(EthaLink.isSubLink("https://www.harlow-systems.org/sub/0123456789abcdef"))   // ours, but never used as it is
+        XCTAssertTrue(EthaLink.sameAccount("https://www.harlow-systems.org/sub/0123456789abcdef", "https://fra.skyrayconfig.org/sub/0123456789abcdef#X"))
+    }
+
     func testOldAppFilesYieldTheLink() {
         let profiles = #"[{"name":"EthaVPN-WS-cdn-CleanIP1-443","outboundJSON":"{}","shareLink":"vless://x","subscriptionURL":"https://fra.mobileiphone.org/sub/0123456789abcdef"}]"#
         XCTAssertEqual(OldAppFiles.firstLink(in: Data(profiles.utf8)), "https://fra.skyrayconfig.org/sub/0123456789abcdef")
@@ -126,6 +134,11 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertEqual(info.profileTitle, "Reza"); XCTAssertEqual(info.announce, "سلام")
         XCTAssertEqual(info.supportURL, "https://t.me/freeandsecurevpn"); XCTAssertEqual(info.webPageURL, "https://x/sub/0123456789abcdef")
         XCTAssertEqual(info.updateIntervalMinutes, 720); XCTAssertNotNil(info.infoUpdated)
+        XCTAssertNil(info.linkHops)
+        SubscriptionHeaders.apply(["x-etha-link-hops": "www.harlow-systems.org=185.83.210.148, bad"], to: &info)
+        XCTAssertEqual(info.linkHops, "www.harlow-systems.org=185.83.210.148")
+        SubscriptionHeaders.apply(["x-etha-link-hops": "garbage"], to: &info)
+        XCTAssertEqual(info.linkHops, "www.harlow-systems.org=185.83.210.148")   // nothing valid: the last good value stays
         SubscriptionHeaders.apply(["announce": ""], to: &info)
         XCTAssertNil(info.announce)
         SubscriptionHeaders.apply(["subscription-userinfo": "garbage"], to: &info)

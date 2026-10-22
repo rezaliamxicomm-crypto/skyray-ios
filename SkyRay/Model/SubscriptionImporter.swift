@@ -7,8 +7,9 @@ import SkyRayXray
 /// in this process) and writes the snapshot the tunnel reads.
 ///
 /// The link is fetched with Encrypted Client Hello enforced (the core's fetch, EchFetch): its host's name is not
-/// stated in the clear. Only when nobody answered that way is it fetched once more as before 1.3.6, by URLSession
-/// without ECH — the operator's last resort for a network that blocks ECH itself.
+/// stated in the clear. When nobody answered that way, through the link hop inside Iran (the core's plain fetch, the
+/// hop's name not listed, dialled at its address). Only when that gave nothing either is it fetched once more as
+/// before 1.3.6, by URLSession without ECH — the operator's last resort for a network that blocks ECH itself.
 struct SubscriptionImporter {
     let store: SkyRayStore
 
@@ -29,7 +30,8 @@ struct SubscriptionImporter {
     func fetch(_ link: String) async throws -> (info: SubscriptionInfo, links: [String]) {
         let url = EthaLink.canonical(link)
         guard URL(string: url) != nil else { throw FetchError.unknownLink }
-        let stored = EchFetch.storedAddresses(lines: store.loadSnapshot()?.lines ?? [], selectedLineId: store.selection.selectedLineId)
+        let snapshot = store.loadSnapshot()
+        let stored = EchFetch.storedAddresses(lines: snapshot?.lines ?? [], selectedLineId: store.selection.selectedLineId)
         // While our tunnel is up the app's own traffic runs through it. First past it, bound to the phone's own
         // interface — that way does not depend on the line that is connected; when nobody answers, through the tunnel.
         var ways: [(interface: String, timeoutMs: Int64, name: String)] = [("", EchFetch.timeoutMs, "directly")]
@@ -50,8 +52,22 @@ struct SubscriptionImporter {
         if let result = answer {
             return try Self.read(status: result.status, headers: result.headers, body: Data(result.body.utf8))
         }
-        // Nobody answered with ECH on any way: the last resort, the link fetched as every version before 1.3.6 did.
-        AppLog.warn("fetch: ECH got no answer, fetching without it (the last resort)")
+        // Nobody answered with ECH: the link hop inside Iran — the core's plain fetch, the hop's name not listed, dialled
+        // at the address the service last named (no DNS to poison), past the tunnel when one is up.
+        if let token = EthaLink.token(of: url) {
+            let known = EchFetch.parseHops(snapshot?.info.linkHops)
+            let hopInterface = (NetworkInterfaces.tunnelIsUp() ? NetworkInterfaces.physical() : nil) ?? ""
+            for hop in (known.isEmpty ? Etha.linkHops : known) {
+                let result = await Self.run(EchFetch.hopRequest(token: token, hop: hop, userAgent: Self.userAgent, interface: hopInterface))
+                if let result, result.plainAnswered {
+                    AppLog.info("fetch: through the hop \(hop.host) via \(result.address), status \(result.status)")
+                    return try Self.read(status: result.status, headers: result.headers, body: Data(result.body.utf8))
+                }
+                AppLog.warn("fetch: the hop \(hop.host) gave nothing: \(result?.failure ?? "no result from the core")")
+            }
+        }
+        // Nobody answered on any of those ways: the last resort, the link fetched as every version before 1.3.6 did.
+        AppLog.warn("fetch: ECH and the hop got no answer, fetching without them (the last resort)")
         let plain = try await Self.fetchPlain(url)
         AppLog.info("fetch: without ECH, status \(plain.status)")
         return try Self.read(status: plain.status, headers: plain.headers, body: plain.body)

@@ -11,6 +11,7 @@ public struct SubscriptionInfo: Codable, Equatable {
     public var supportURL: String?
     public var webPageURL: String?
     public var updateIntervalMinutes: Int64?
+    public var linkHops: String?           // the service's last X-Etha-Link-Hops ("host=ip,…"): where the link hop inside Iran is
     public var infoUpdated: Date?
     public init() {}
 }

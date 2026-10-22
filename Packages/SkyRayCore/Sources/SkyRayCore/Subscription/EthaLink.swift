@@ -21,9 +21,10 @@ public enum EthaLink {
     /// The account token of a link on the current address.
     public static func token(of link: String?) -> String? { token(in: link, hosts: Etha.subHosts) }
 
-    /// A link on an earlier address → the same token on the current one, the name after '#' kept. Anything else: nil.
+    /// A link on an earlier address, or on the link hop inside Iran → the same token on the current one, the name
+    /// after '#' kept. Anything else: nil.
     public static func migratedUrl(_ link: String?) -> String? {
-        guard let link = link, let token = token(in: link, hosts: Etha.oldSubHosts) else { return nil }
+        guard let link = link, let token = token(in: link, hosts: Etha.oldSubHosts + Etha.hopSubHosts) else { return nil }
         let t = link.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = t.firstIndex(of: "#").map { String(t[t.index(after: $0)...]) } ?? ""
         let next = "https://\(Etha.subHost)\(Etha.subPath)\(token)"

@@ -110,4 +110,31 @@ final class EchFetchTests: XCTestCase {
         XCTAssertNil(EchFetchResult.parse("not json"))
         XCTAssertNil(EchFetchResult.parse("[1,2]"))
     }
+
+    func testHopRequestIsPlainAtTheHopsAddress() {
+        let hop = LinkHop(host: "www.harlow-systems.org", ip: "185.83.210.148")
+        let req = EchFetch.hopRequest(token: "0123456789abcdef", hop: hop, userAgent: "SkyRay/1 (ios)", interface: "en0")
+        XCTAssertEqual(req.url, "https://www.harlow-systems.org/sub/0123456789abcdef")
+        XCTAssertEqual(req.addresses, ["185.83.210.148"])
+        XCTAssertTrue(req.plain); XCTAssertEqual(req.interface, "en0"); XCTAssertEqual(req.timeoutMs, Etha.hopTimeoutMs)
+        XCTAssertTrue(req.pinnedAddresses.isEmpty); XCTAssertTrue(req.resolvers.isEmpty); XCTAssertEqual(req.pinnedKey, ""); XCTAssertEqual(req.lookupName, "")
+        XCTAssertTrue(req.json()?.contains("\"plain\":true") ?? false)
+        XCTAssertFalse(EchFetch.request(url: "https://x/sub/y", stored: [], userAgent: "u").plain)   // the ECH ways stay ECH
+    }
+
+    func testLinkHopsParseInOrderAndSkipGarbage() {
+        let hops = EchFetch.parseHops(" www.harlow-systems.org=185.83.210.148 , WWW.Spare.Example=10.0.0.1,bad,=1.2.3.4,host=300.1.1.1,-x.y=1.2.3.4, www.harlow-systems.org=185.83.210.148")
+        XCTAssertEqual(hops, [LinkHop(host: "www.harlow-systems.org", ip: "185.83.210.148"), LinkHop(host: "www.spare.example", ip: "10.0.0.1")])
+        XCTAssertEqual(EchFetch.format(hops), "www.harlow-systems.org=185.83.210.148,www.spare.example=10.0.0.1")
+        XCTAssertTrue(EchFetch.parseHops(nil).isEmpty); XCTAssertTrue(EchFetch.parseHops(" ").isEmpty); XCTAssertTrue(EchFetch.parseHops("garbage").isEmpty)
+        XCTAssertEqual(EchFetch.parseHops(EchFetch.format(Etha.linkHops)), Etha.linkHops)
+        XCTAssertTrue(Etha.linkHops.allSatisfy { Etha.hopSubHosts.contains($0.host) })   // a link on the hop's name is ours
+    }
+
+    func testPlainAnsweredIsAnyStatusWithoutError() {
+        var r = EchFetchResult(); r.status = 403; r.keySource = "plain"
+        XCTAssertTrue(r.plainAnswered); XCTAssertFalse(r.answered); XCTAssertEqual(r.failure, "status 403")
+        r.error = "plain: dial"; XCTAssertFalse(r.plainAnswered)
+        var e = EchFetchResult(); e.status = 0; XCTAssertFalse(e.plainAnswered)
+    }
 }
