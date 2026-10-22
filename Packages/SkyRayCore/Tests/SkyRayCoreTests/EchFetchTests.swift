@@ -59,7 +59,8 @@ final class EchFetchTests: XCTestCase {
         // the core reads these keys by name (echfetch.go's json tags): a renamed property would arrive empty
         let json = try XCTUnwrap(request.json())
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), ["url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs", "interface"])
+        XCTAssertEqual(Set(object.keys), ["url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs", "interface", "plain"])
+        XCTAssertEqual(object["plain"] as? Bool, false)                 // the ECH ways never ask for the plain one
         XCTAssertEqual(object["url"] as? String, "https://fra.skyrayconfig.org/sub/0123456789abcdef")
         XCTAssertEqual(object["userAgent"] as? String, "SkyRay/1.3.6 (ios)")
         XCTAssertEqual((object["timeoutMs"] as? NSNumber)?.int64Value, EchFetch.timeoutMs)
