@@ -287,14 +287,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let request = (try? JSONDecoder().decode(TunnelRequest.self, from: messageData)) ?? TunnelRequest(cmd: "status")
             let answer: () -> Void = { completionHandler?(try? JSONEncoder().encode(self.statusReply())) }
             switch request.cmd {
-            case "probe":
-                guard let engine = self.engine else { answer(); return }
-                engine.probeCurrent { ms in
-                    self.store.updateTunnelState { $0.lastProbeMs = ms; $0.lastProbeAt = Date() }
-                    if ms < 0 { self.log.warn("probe failed on \(self.active?.remark ?? "?")") }
-                    answer()
-                }
-            case "ping":
+            case "probe", "ping":   // since 2.0.0 one thing: every line measured through the running core, the answer says what it did
                 guard let engine = self.engine else { answer(); return }
                 engine.pingAll { outcome in
                     var reply = self.statusReply()

@@ -7,7 +7,7 @@ public struct TunnelRequest: Codable, Equatable {
     public var lines: Int?
     public init(cmd: String, lineId: String? = nil, lines: Int? = nil) { self.cmd = cmd; self.lineId = lineId; self.lines = lines }
     public static let status = TunnelRequest(cmd: "status")
-    public static let probe = TunnelRequest(cmd: "probe")
+    public static let probe = TunnelRequest(cmd: "probe")   // the same as ping since 2.0.0 (the extension measures every line, never one)
     public static func switchTo(_ id: String) -> TunnelRequest { TunnelRequest(cmd: "switch", lineId: id) }
     /// Every line measured through the running core now, and the best taken by Auto's rules (AutoEngine).
     public static let ping = TunnelRequest(cmd: "ping")
