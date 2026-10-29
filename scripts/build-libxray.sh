@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds LibXray.xcframework from XTLS/libXray at the tag pinned in Vendor/libxray-source.lock, with the
 # subscription fetch with Encrypted Client Hello compiled into its C bridge: echfetch/echfetch.go and
-# echfetch/echfetch_darwin.go as package main, and libxray/echfetch_export.go (CGoFetchSubscriptionEch).
+# echfetch/echfetch_darwin.go as package main, and libxray/*.go: echfetch_export.go (CGoFetchSubscriptionEch) and
+# autoctl_export.go (CGoBalancerOverride, Auto's balancer override through the API inbound).
 # The build itself is upstream's own recipe (python3 build/main.py apple go), every slice it makes.
 # Needs a Mac with Xcode, Go and Python 3. Output: build/libxray-apple-cgo.zip, laid out like upstream's
 # release asset. The workflow libxray.yml runs this and publishes the zip; nobody needs to run it by hand.
@@ -17,7 +18,7 @@ for f in echfetch.go echfetch_darwin.go; do
   sed 's/^package libv2ray$/package main/' "echfetch/$f" > "$SRC/cgo_bridge/$f"
   grep -q '^package main$' "$SRC/cgo_bridge/$f" || { echo "$f: no package clause to rewrite"; exit 1; }
 done
-cp libxray/echfetch_export.go "$SRC/cgo_bridge/"
+cp libxray/*.go "$SRC/cgo_bridge/"   # echfetch_export.go (CGoFetchSubscriptionEch), autoctl_export.go (CGoBalancerOverride)
 (cd "$SRC" && go version && python3 build/main.py apple go)
 HEADER="$SRC/LibXray.xcframework/ios-arm64/Headers/libXray.h"
 grep -q 'CGoFetchSubscriptionEch' "$HEADER" || { echo "the built header does not export CGoFetchSubscriptionEch"; exit 1; }

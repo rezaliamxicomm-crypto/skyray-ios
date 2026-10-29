@@ -2,7 +2,7 @@ name: LibXray with the ECH fetch
 
 # LibXray.xcframework is built here, not downloaded from upstream: XTLS/libXray at the tag pinned in
 # Vendor/libxray-source.lock, with the subscription fetch with Encrypted Client Hello compiled into its C bridge
-# (echfetch/, libxray/echfetch_export.go; scripts/build-libxray.sh). The zip is published as a release of this
+# (echfetch/, libxray/*.go; scripts/build-libxray.sh). The zip is published as a release of this
 # repository, named by what went into it, so every build — CI's and the Xcode archive on a Mac — downloads the very
 # same file: Vendor/libxray.lock pins its sha256 and scripts/fetch-libxray.sh verifies it. One Go runtime per
 # process: the fetch has to live inside LibXray, a second Go library beside it cannot be linked.
@@ -40,7 +40,7 @@ jobs:
           TAG=$(sed -n 's/^tag=//p' Vendor/libxray-source.lock)
           GO=$(sed -n 's/^go=//p' Vendor/libxray-source.lock)
           # the release is named by its inputs: the same inputs never build twice, a changed one gets a new name
-          HASH=$(cat Vendor/libxray-source.lock echfetch/echfetch.go echfetch/echfetch_darwin.go libxray/echfetch_export.go scripts/build-libxray.sh | shasum -a 256 | cut -c1-10)
+          HASH=$(cat Vendor/libxray-source.lock echfetch/echfetch.go echfetch/echfetch_darwin.go libxray/echfetch_export.go libxray/autoctl_export.go scripts/build-libxray.sh | shasum -a 256 | cut -c1-10)
           echo "release=libxray-$TAG-ech-$HASH" >> "$GITHUB_OUTPUT"
           echo "go=$GO" >> "$GITHUB_OUTPUT"
           echo "release libxray-$TAG-ech-$HASH, Go $GO"
