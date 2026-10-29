@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var tunnel: TunnelReply?
     @Published private(set) var refreshing = false
     @Published private(set) var declarationAccepted = false
+    /// The extension's measurements of the lines through the running core (TunnelState.results), while the tunnel is up.
+    @Published private(set) var tunnelResults: [String: Int64] = [:]
     @Published var banner: BannerMessage?
 
     let store: SkyRayStore
@@ -33,7 +35,6 @@ final class AppModel: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var clipboardTried: String?
     private var launched = false
-    private var pendingConnect = false
     private var lastSwitchNoticed: Date?
 
     init(store: SkyRayStore = .appGroup()) {
@@ -56,7 +57,15 @@ final class AppModel: ObservableObject {
         snapshot = store.loadSnapshot()
         selection = store.selection
         declarationAccepted = store.declarationAccepted
+        tunnelResults = store.tunnelState.results ?? [:]
     }
+
+    private func refreshTunnelResults() { tunnelResults = store.tunnelState.results ?? [:] }
+
+    /// The lines' last measurements: the extension's while the tunnel is up and it has some, else the app's own test.
+    private var results: [String: Int64] { vpn.isActive && !tunnelResults.isEmpty ? tunnelResults : selection.results }
+    func delay(of id: String) -> Int64 { results[id] ?? 0 }
+    var candidates: [AutoSelect.Candidate] { lines.map { AutoSelect.Candidate(id: $0.id, delayMs: delay(of: $0.id), order: $0.order) } }
 
     var lines: [Line] { snapshot?.lines ?? [] }
     var hasSubscription: Bool { !(snapshot?.lines.isEmpty ?? true) }
@@ -146,6 +155,7 @@ final class AppModel: ObservableObject {
             tunnel = reply
             noticeSwitch(reply)
         }
+        refreshTunnelResults()
     }
 
     private func probeNow() async {
@@ -266,42 +276,24 @@ final class AppModel: ObservableObject {
             return
         }
         phase = .connecting
+        // The line to start on: the pinned one; else the best of results younger than delayFresh; else the line used
+        // last; else the first. Nothing is waited for: the extension measures every line through the running core as
+        // soon as the tunnel is up and moves new connections to a better one by itself (AutoEngine).
         let selectedOk = selection.selectedLineId.map { id in lines.contains { $0.id == id } } ?? false
-        if selection.pinned, selectedOk {
-            await startTunnel()
-        } else if selectedOk, AutoSelect.resultsFresh(lastTestAt: selection.lastTestAt) {
-            if let best = AutoSelect.best(selection.candidates(lines)) { store.updateSelection { $0.selectedLineId = best } ; selection = store.selection }
-            await startTunnel()
-        } else {
-            phase = .finding
-            pendingConnect = true
-            let guardTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(Etha.testGuard * 1_000_000_000))
-                guard let self = self, self.pendingConnect else { return }
-                self.pendingConnect = false
-                await self.connectWithBest()
-            }
-            await testAll()
-            guardTask.cancel()
-            if pendingConnect {
-                pendingConnect = false
-                await connectWithBest()
-            }
-        }
-    }
-
-    private func connectWithBest() async {
-        let best = AutoSelect.best(selection.candidates(lines))
-        let fallback = selection.selectedLineId.flatMap { id in lines.first { $0.id == id }?.id } ?? lines.first?.id
-        guard let chosen = best ?? fallback else {
+        if selection.pinned, !selectedOk { store.updateSelection { $0.pinned = false }; selection = store.selection }
+        let selected = selectedOk ? selection.selectedLineId : nil
+        let lastMeasured = [selection.lastTestAt, store.tunnelState.lastRoundAt].compactMap { $0 }.max()
+        let start: String?
+        if selection.pinned { start = selected }
+        else if AutoSelect.resultsFresh(lastTestAt: lastMeasured) { start = AutoSelect.best(candidates) ?? selected }
+        else { start = selected }
+        guard let chosen = start ?? lines.first?.id else {
             phase = .idle
             banner = BannerMessage(text: L("no.line"), kind: .error)
             return
         }
-        if best == nil { banner = BannerMessage(text: L("no.line"), kind: .info) }
         store.updateSelection { $0.selectedLineId = chosen }
         selection = store.selection
-        phase = .connecting
         await startTunnel()
     }
 
@@ -329,9 +321,17 @@ final class AppModel: ObservableObject {
 
     // MARK: testing and choosing
 
-    /// Every line through libXray; results land in the selection as they arrive.
+    /// Every line measured: by the extension through the running core while the tunnel is up (TunnelRequest.ping,
+    /// the results come back through the App Group), else by a temporary Xray in this process (LineTester).
     func testAll() async {
         guard hasSubscription else { return }
+        if vpn.isActive {
+            let started = Date()
+            if let reply = await vpn.send(.ping) { tunnel = reply; noticeSwitch(reply) }
+            refreshTunnelResults()
+            AppLog.info(String(format: "test: %d lines through the tunnel in %.1f s", lines.count, Date().timeIntervalSince(started)))
+            return
+        }
         store.updateSelection { $0.results = [:] }
         selection = store.selection
         let iface = vpn.isActive ? NetworkInterfaces.physical() : nil
@@ -349,27 +349,31 @@ final class AppModel: ObservableObject {
                            vpn.isActive ? "up" : "down", iface ?? "-", summary))
     }
 
-    /// "Ping all": every line measured, then the outcome said out loud — the fastest line (selected for the next
-    /// Connect when disconnected, announced when connected), or that the picked line stays. Same as the Android app.
+    /// "Ping all": every line measured, then the outcome said out loud. Connected, the extension measured through the
+    /// running core and decided by Auto's rules (a move is said as a switch, else the fastest, or the pinned line that
+    /// stays); disconnected, the selection moves to the best so the next Connect starts on it. Same as the Android app.
     func testAgain() async {
         guard hasSubscription, phase == .idle else { return }
         phase = .finding
+        let before = tunnel?.lineId
         await testAll()
         phase = .idle
-        let best = AutoSelect.best(selection.candidates(lines))
+        if vpn.isActive {
+            guard let now = tunnel?.lineId, let line = lines.first(where: { $0.id == now }) else {
+                banner = BannerMessage(text: L("no.line"), kind: .error); return
+            }
+            if selection.pinned { banner = BannerMessage(text: L("ping.kept", line.displayName), kind: .info) }
+            else if now != before { banner = BannerMessage(text: L("switched", line.displayName), kind: .ok) }
+            else { banner = BannerMessage(text: L("ping.best", line.displayName), kind: .ok) }
+            return
+        }
+        let best = AutoSelect.best(candidates)
         if selection.pinned {
             if let kept = currentLine?.displayName { banner = BannerMessage(text: L("ping.kept", kept), kind: .info) }
             return
         }
         guard let best = best, let bestLine = lines.first(where: { $0.id == best }) else {
             banner = BannerMessage(text: L("no.line"), kind: .error); return
-        }
-        // The line changes only when the customer connects (Auto picks the fastest then) or picks one by hand: a
-        // test never moves a live connection (operator's rule, 2026-09-30). Disconnected, the selection moves to
-        // the best so the next Connect uses it.
-        if best != selection.selectedLineId && vpn.isActive {
-            banner = BannerMessage(text: L("ping.faster", bestLine.displayName), kind: .ok)
-            return
         }
         banner = BannerMessage(text: L("ping.best", bestLine.displayName), kind: .ok)
         if best != selection.selectedLineId {
@@ -385,26 +389,31 @@ final class AppModel: ObservableObject {
             selection = store.selection
             if vpn.isActive, let reply = await vpn.send(.switchTo(id)) { tunnel = reply; noticeSwitch(reply) }
         } else {
-            store.updateSelection { $0.pinned = false; $0.lastTestAt = nil }
+            store.updateSelection { $0.pinned = false }
             selection = store.selection
             if vpn.isActive {
-                phase = .disconnecting
-                vpn.stop()
-                for _ in 0..<50 where vpn.isActive { try? await Task.sleep(nanoseconds: 100_000_000) }
+                // Auto again: the extension measures every line and decides; nothing reconnects
+                phase = .finding
+                let before = tunnel?.lineId
+                if let reply = await vpn.send(.ping) { tunnel = reply }
+                refreshTunnelResults()
+                selection = store.selection
                 phase = .idle
-                await connectTapped()
+                if let now = tunnel?.lineId, now != before, let line = lines.first(where: { $0.id == now }) {
+                    banner = BannerMessage(text: L("switched", line.displayName), kind: .ok)
+                }
             }
         }
     }
 
     var serverRows: [ServerRows.Row] {
-        ServerRows.rows(selection.candidates(lines), nameOf: { id in self.lines.first { $0.id == id }?.remark ?? id },
+        ServerRows.rows(candidates, nameOf: { id in self.lines.first { $0.id == id }?.remark ?? id },
                         auto: L("auto"), untested: L("ping.untested"), failed: L("ping.failed"))
     }
 
     /// The candidates fastest first (untested, then failed, last) — Android's ServerPicker.sortedCandidates.
     var sortedCandidates: [AutoSelect.Candidate] {
-        selection.candidates(lines).sorted { a, b in
+        candidates.sorted { a, b in
             func rank(_ c: AutoSelect.Candidate) -> (Int, Int64, Int) {
                 if c.delayMs > 0 { return (0, c.delayMs, c.order) }
                 return (c.delayMs == 0 ? 1 : 2, 0, c.order)
@@ -422,12 +431,12 @@ final class AppModel: ObservableObject {
     }
 
     /// The panel's ping: the selected line's last result, 0 when none.
-    var panelDelay: Int64 { selection.selectedLineId.map { selection.delay(of: $0) } ?? 0 }
+    var panelDelay: Int64 { selection.selectedLineId.map { delay(of: $0) } ?? 0 }
 
     /// Under "Auto (fastest)" in the sheet: "Now <line> · <ms> ms", or what Auto does before any pick.
     var autoNowText: String {
         guard let id = selection.selectedLineId, let line = lines.first(where: { $0.id == id }) else { return L("auto.hint") }
-        let ms = selection.delay(of: id)
+        let ms = delay(of: id)
         return L("auto.now", ms > 0 ? "\(line.displayName) · \(ms) ms" : line.displayName)
     }
 
@@ -435,7 +444,7 @@ final class AppModel: ObservableObject {
     var serverLabel: String {
         let id = selection.selectedLineId
         let name = id.flatMap { sid in lines.first { $0.id == sid }?.remark }
-        let delay = id.map { selection.delay(of: $0) } ?? 0
+        let delay = id.map { self.delay(of: $0) } ?? 0
         return ServerRows.currentLabel(pinned: selection.pinned, currentName: name, delayMs: delay, auto: L("auto"), autoPicked: { L("auto.picked", $0) })
     }
 

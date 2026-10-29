@@ -61,6 +61,30 @@ public enum LibXrayBridge {
         }
     }
 
+    /// Auto (the extension's AutoEngine): the balancer in the tunnel's config held to one outbound — Xray's own `api bo`
+    /// through the config's API inbound, since libXray keeps its managed instance to itself — compiled into this LibXray
+    /// as CGoBalancerOverride (libxray/autoctl_export.go). An empty target gives the balancer back to its strategy.
+    /// Blocking for up to three seconds: never on the main thread.
+    public static func balancerOverride(api: String, balancer: String, target: String) throws {
+        let request: [String: Any] = ["api": api, "balancer": balancer, "target": target]
+        guard let data = try? JSONSerialization.data(withJSONObject: request), let json = String(data: data, encoding: .utf8) else {
+            throw LibXrayError.encoding
+        }
+        let text: String = json.withCString { cString -> String in
+            guard let copy = strdup(cString) else { return "" }
+            defer { free(copy) }
+            guard let out = CGoBalancerOverride(copy) else { return "" }
+            defer { CGoFree(out) }
+            return String(cString: out)
+        }
+        guard let responseData = text.data(using: .utf8),
+              let response = (try? JSONSerialization.jsonObject(with: responseData)) as? [String: Any] else {
+            throw LibXrayError.unexpected(String(text.prefix(200)))
+        }
+        if (response["ok"] as? Bool) == true { return }
+        throw LibXrayError.failed((response["error"] as? String) ?? String(text.prefix(200)))
+    }
+
     public static func runXray(configJSON: String) throws { try invoke("runXray", payload: ["xrayJson": configJSON]) }
     public static func stopXray() throws { try invoke("stopXray") }
 

@@ -103,6 +103,9 @@ public enum SubscriptionHeaders {
             if let m = updateIntervalMinutes(raw) { info.updateIntervalMinutes = m }
             seen = true
         }
+        if let raw = headers[Etha.autoHeader] {
+            let t = raw.trimmingCharacters(in: .whitespaces); info.autoPolicy = t.isEmpty ? nil : t; seen = true
+        }
         if seen { info.infoUpdated = now }
         return seen
     }

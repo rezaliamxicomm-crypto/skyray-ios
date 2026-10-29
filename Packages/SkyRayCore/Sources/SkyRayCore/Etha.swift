@@ -36,16 +36,15 @@ public enum Etha {
     public static let minUpdateMinutes: Int64 = 15
     /// A silent refresh on open when the last fetch is older than this.
     public static let staleAfter: TimeInterval = 3600
-    /// Measured delays are trusted for this long before Connect tests again.
+    /// Measured delays are trusted for this long before Connect looks for a better line to start on.
     public static let delayFresh: TimeInterval = 600
-    public static let watchdogInterval: TimeInterval = 180
-    public static let watchdogRetry: TimeInterval = 20
-    public static let watchdogFailures = 2
+    /// Auto (AutoPolicy, AutoEngine): the service's header with the numbers, the balancer's tag in the tunnel's config.
+    public static let autoHeader = "x-etha-auto"
+    public static let autoBalancerTag = "auto"
     public static let probeURL = "https://www.gstatic.com/generate_204"
     public static let probeFallbackURL = "https://www.google.com/generate_204"
     public static let pingTimeoutSeconds = 8
     public static let connectGuard: TimeInterval = 25
-    public static let testGuard: TimeInterval = 60
 
     // The tunnel: the utun's addresses, the loopback ports when libXray names no free ones.
     public static let tunnelMTU = 1500
@@ -55,6 +54,7 @@ public enum Etha {
     public static let tunnelDNS = ["1.1.1.1"]
     public static let socksPortFallback = 10808
     public static let probePortFallback = 41284
+    public static let apiPortFallback = 41285
 
     // Our own link is fetched with Encrypted Client Hello enforced (EchFetch → LibXray's CGoFetchSubscriptionEch,
     // echfetch/ in this repo), past the tunnel and then through it; when nobody answered on either way, through the

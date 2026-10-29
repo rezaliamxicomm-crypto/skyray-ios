@@ -9,8 +9,8 @@ options:
   generateEmptyDirectories: false
 settings:
   base:
-    MARKETING_VERSION: "1.3.7"            # CI passes VERSION on the command line; keep in step by hand
-    CURRENT_PROJECT_VERSION: "138"        # an Xcode archive: above the 137 uploaded for 1.3.7; CI uses 100 + its run number
+    MARKETING_VERSION: "1.3.8"            # CI passes VERSION on the command line; keep in step by hand
+    CURRENT_PROJECT_VERSION: "139"        # an Xcode archive: above 1.3.7's 138; CI uses 100 + its run number
     SWIFT_VERSION: "5.10"
     SWIFT_STRICT_CONCURRENCY: minimal
     TARGETED_DEVICE_FAMILY: "1,2"         # iPhone and iPad: the store record shipped on iPad, an update may not drop it

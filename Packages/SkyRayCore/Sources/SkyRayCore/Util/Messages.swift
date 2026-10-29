@@ -2,13 +2,15 @@ import Foundation
 
 /// App → tunnel requests (sendProviderMessage) and the tunnel's replies, as JSON.
 public struct TunnelRequest: Codable, Equatable {
-    public var cmd: String            // status | probe | switch | logTail
+    public var cmd: String            // status | probe | switch | ping | logTail
     public var lineId: String?
     public var lines: Int?
     public init(cmd: String, lineId: String? = nil, lines: Int? = nil) { self.cmd = cmd; self.lineId = lineId; self.lines = lines }
     public static let status = TunnelRequest(cmd: "status")
     public static let probe = TunnelRequest(cmd: "probe")
     public static func switchTo(_ id: String) -> TunnelRequest { TunnelRequest(cmd: "switch", lineId: id) }
+    /// Every line measured through the running core now, and the best taken by Auto's rules (AutoEngine).
+    public static let ping = TunnelRequest(cmd: "ping")
     public static func logTail(_ n: Int) -> TunnelRequest { TunnelRequest(cmd: "logTail", lines: n) }
 }
 

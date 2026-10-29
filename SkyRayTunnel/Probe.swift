@@ -7,15 +7,18 @@ final class Probe {
     let port: Int
     private let session: URLSession
 
-    init(port: Int) {
+    private let timeoutSeconds: Int
+
+    init(port: Int, timeoutSeconds: Int = 10) {
         self.port = port
+        self.timeoutSeconds = timeoutSeconds
         let config = URLSessionConfiguration.ephemeral
         config.connectionProxyDictionary = [
             "HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": port,
             "HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": port
         ]
-        config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 12
+        config.timeoutIntervalForRequest = TimeInterval(timeoutSeconds)
+        config.timeoutIntervalForResource = TimeInterval(timeoutSeconds + 2)
         config.waitsForConnectivity = false
         config.urlCache = nil
         session = URLSession(configuration: config)
@@ -32,6 +35,17 @@ final class Probe {
         return -1
     }
 
+    /// Auto's measurement of one line (AutoEngine): one window for the first request — no answer within it and the
+    /// line counts as failed, -1 — then the warm second down the kept-alive connection, the smaller time kept.
+    func measureLine() -> Int64 {
+        guard let first = head(Etha.probeURL) else { return -1 }
+        if let second = head(Etha.probeURL) { return min(first, second) }
+        return first
+    }
+
+    /// The session's connections closed; the probe is not used after this.
+    func invalidate() { session.finishTasksAndInvalidate() }
+
     private func head(_ urlString: String) -> Int64? {
         guard let url = URL(string: urlString) else { return nil }
         var request = URLRequest(url: url)
@@ -44,7 +58,7 @@ final class Probe {
             answered = (response as? HTTPURLResponse) != nil
             done.signal()
         }.resume()
-        _ = done.wait(timeout: .now() + 13)
+        _ = done.wait(timeout: .now() + .seconds(timeoutSeconds + 3))
         return answered ? Int64(Date().timeIntervalSince(started) * 1000) : nil
     }
 }

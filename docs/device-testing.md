@@ -36,8 +36,9 @@ If the build fails, `build/device-build.log` has the full compiler output; the l
 
 1. A link tapped in Telegram opens the app and adds the account (universal links need the server's
    `apple-app-site-association` file; until then the page's button and the clipboard import do it).
-2. Connect → "Finding the best server…" → Connected with the line and its delay; browse a foreign site (proxied) and an
-   Iranian one (direct); a Google search works; an Iranian banking app works while connected.
+2. Connect → Connected within a second or two, with the line and its delay; the server sheet fills with every line's
+   measurement over the next seconds, and the line may change once to a clearly faster one (a banner says so); browse a
+   foreign site (proxied) and an Iranian one (direct); a Google search works; an Iranian banking app works while connected.
 3. Wi-Fi ↔ cellular: the tunnel stays up; after airplane mode, it recovers within a minute.
 4. Lock the phone for ten minutes, then use it: still connected.
 5. Test again re-picks the fastest line; picking a line pins it; Auto unpins.

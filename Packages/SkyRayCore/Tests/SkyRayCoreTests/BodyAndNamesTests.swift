@@ -46,17 +46,6 @@ final class BodyAndNamesTests: XCTestCase {
         XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: "EthaVPN-WS-fra-Domain-443", delayMs: 95, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto · Domain · WS/443 (95 ms)")
         XCTAssertEqual(ServerRows.currentLabel(pinned: true, currentName: "EthaVPN-WS-fra-Domain-443", delayMs: 95, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Domain · WS/443 (95 ms)")
     }
-    func testRotation() {
-        func line(_ id: String, _ order: Int) -> Line { Line(id: id, link: "", remark: "EthaVPN-WS-cdn-\(id)-443", transport: "WS", endpointLabel: id, port: 443, order: order, outboundJSON: "{}") }
-        let lines = [line("a", 0), line("b", 1), line("c", 2)]
-        let first = LineRotation.next(current: "a", tried: [], lines: lines, results: ["b": 300, "c": 90])!
-        XCTAssertEqual(first.id, "c"); XCTAssertEqual(first.tried, ["a"])
-        let second = LineRotation.next(current: "c", tried: first.tried, lines: lines, results: [:])!
-        XCTAssertEqual(second.id, "b")
-        XCTAssertNil(LineRotation.next(current: "b", tried: second.tried, lines: lines, results: [:]))
-        XCTAssertEqual(LineRotation.nextProbeDelay(failures: 0), 180)
-        XCTAssertEqual(LineRotation.nextProbeDelay(failures: 1), 20)
-    }
     func testMessagesRoundTrip() throws {
         let req = TunnelRequest.switchTo("abc")
         let data = try JSONEncoder().encode(req)

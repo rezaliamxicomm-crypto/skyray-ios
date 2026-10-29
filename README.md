@@ -6,9 +6,11 @@ with the same look (Vazirmatn, the same colours, the same screens and server lis
 [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) turning the phone's packets into SOCKS5 connections
 to it: the customer taps the link the Telegram bot gave them (or the app finds it on the clipboard after the install),
 the app adds the account, picks the fastest line and connects. Days and data left on the home screen; Support in the
-app; renewals happen in Telegram. Built for networks that filter hard: real HTTP probes through every line, the
-fastest wins, a watchdog that switches lines when one dies, Iranian sites and the LAN direct, DNS through the tunnel,
-QUIC blocked, and a TLS-fragment mode in the config builder for when a handshake is dropped by its SNI.
+app; renewals happen in Telegram. Built for networks that filter hard: the tunnel's Xray holds every line behind one
+balancer and the extension measures them through it — real HTTP probes, the warm round trip — and moves new connections
+to a clearly better line or away from a dead one without cutting anything (AutoEngine, AutoPolicy); Iranian sites and
+the LAN direct, DNS through the tunnel, QUIC blocked, and a TLS-fragment mode in the config builder for when a handshake
+is dropped by its SNI.
 
 ## Layout
 

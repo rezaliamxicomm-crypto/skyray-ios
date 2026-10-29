@@ -9,19 +9,23 @@ enum TunnelError: Error, CustomStringConvertible {
     case noSubscription
     case noTunFD
     case hevExited(Int32)
+    case balancer(String)
     var description: String {
         switch self {
         case .noSubscription: return "no subscription on this phone"
         case .noTunFD: return "the tunnel's file descriptor was not found"
         case .hevExited(let code): return "the packet tunnel stopped (code \(code))"
+        case .balancer(let e): return "the balancer could not be held to the line: \(e)"
         }
     }
 }
 
 /// The shape of an iOS Xray tunnel that is known to fit the extension's memory: Xray listens on a loopback SOCKS5
 /// port, hev-socks5-tunnel turns the utun's IP packets into SOCKS5 connections to it. The app writes the
-/// subscription and the chosen line into the App Group; this side only reads them, runs the two, probes the line it
-/// is on and answers the app's questions. Memory is the constraint (about 50 MiB for the whole process).
+/// subscription and the chosen line into the App Group; this side only reads them, runs the two and answers the
+/// app's questions. Xray holds every line of the subscription behind one balancer, and AutoEngine holds the balancer
+/// to the best line by measuring through that Xray — so a change of line never restarts anything (Auto's design,
+/// 2026-10-29). Memory is the constraint (about 50 MiB for the whole process).
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let store = SkyRayStore.appGroup()
     private lazy var log = RingLog(url: store.tunnelLogURL)
@@ -29,10 +33,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let hev = HevTunnel()
     private var tunFD: Int32 = -1
     private var socksPort = Etha.socksPortFallback
-    private var probePort = Etha.probePortFallback
+    private var apiPort = Etha.apiPortFallback
+    private var probePorts: [String: Int] = [:]
+    private var lines: [Line] = []
     private var active: Line?
-    private var probe: Probe?
-    private var watchdog: Watchdog?
+    private var engine: AutoEngine?
     private var memoryTimer: DispatchSourceTimer?
     private var pathMonitor: NWPathMonitor?
     private var pathWasSatisfied = true
@@ -50,9 +55,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let snapshot = self.store.loadSnapshot(), !snapshot.lines.isEmpty else {
                 self.log.error("start: no subscription"); completionHandler(TunnelError.noSubscription); return
             }
+            self.lines = snapshot.lines.sorted { $0.order < $1.order }
             let wanted = (options?["lineId"] as? String) ?? self.store.selection.selectedLineId
-            let line = snapshot.lines.first { $0.id == wanted } ?? snapshot.lines[0]
-            self.log.info(String(format: "start: %ld lines, memory %.1f MiB", snapshot.lines.count, MemoryFootprint.currentMB()))
+            let line = self.lines.first { $0.id == wanted } ?? self.lines[0]
+            self.log.info(String(format: "start: %ld lines, memory %.1f MiB", self.lines.count, MemoryFootprint.currentMB()))
             self.setTunnelNetworkSettings(TunnelSettings.make()) { error in
                 if let error = error {
                     self.log.error("settings: \(error)"); completionHandler(error); return
@@ -61,15 +67,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     do {
                         guard let fd = TunFD.find(in: self) else { throw TunnelError.noTunFD }
                         self.tunFD = fd
-                        if let ports = try? LibXrayBridge.getFreePorts(2), ports.count == 2 {
-                            self.socksPort = ports[0]; self.probePort = ports[1]
-                        }
-                        try self.startXray(line)
+                        self.assignPorts()
+                        try self.startXray(on: line)
                         self.startHev()
                         let version = LibXrayBridge.xrayVersion()
-                        self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version }
-                        self.log.info("tunnel up: xray \(version), fd \(fd), socks \(self.socksPort), probe \(self.probePort)")
-                        self.startWatchdog(lineCount: snapshot.lines.count)
+                        self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version; $0.results = nil; $0.lastRoundAt = nil }
+                        self.log.info("tunnel up: xray \(version), fd \(fd), socks \(self.socksPort), api \(self.apiPort)")
+                        self.startEngine(on: line, policy: AutoPolicy.parse(snapshot.info.autoPolicy))
                         self.startMemoryLog()
                         self.startPathMonitor()
                         completionHandler(nil)
@@ -86,7 +90,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         queue.async {
             self.stopping = true
-            self.watchdog?.stop(); self.watchdog = nil
+            self.engine?.stop(); self.engine = nil
             self.memoryTimer?.cancel(); self.memoryTimer = nil
             self.pathMonitor?.cancel(); self.pathMonitor = nil
             self.hev.stop()
@@ -99,26 +103,54 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {
-        queue.async { self.watchdog?.pause(); completionHandler() }
+        queue.async { self.engine?.pause(); completionHandler() }
     }
 
     override func wake() {
-        queue.async { self.watchdog?.resume(after: 15) }
+        queue.async { self.engine?.resume() }
     }
 
     // MARK: the cores
 
-    /// Xray on the loopback SOCKS5 port hev feeds; restarted on every line switch while hev keeps running.
-    private func startXray(_ line: Line) throws {
+    /// The loopback ports: SOCKS for hev, the API for the balancer, one probe inbound per line.
+    private func assignPorts() {
+        let wanted = 2 + lines.count
+        if let ports = try? LibXrayBridge.getFreePorts(wanted), ports.count == wanted {
+            socksPort = ports[0]; apiPort = ports[1]
+            probePorts = Dictionary(uniqueKeysWithValues: zip(lines.map { $0.id }, ports.dropFirst(2)))
+        } else {
+            socksPort = Etha.socksPortFallback; apiPort = Etha.apiPortFallback
+            probePorts = Dictionary(uniqueKeysWithValues: lines.enumerated().map { ($1.id, Etha.probePortFallback + $0) })
+        }
+    }
+
+    /// Xray with every line behind the balancer, the balancer held to `line` before hev feeds it a single connection.
+    private func startXray(on line: Line) throws {
         let assets = Bundle.main.resourceURL?.path ?? Bundle.main.bundlePath
         setenv("XRAY_LOCATION_ASSET", assets, 1)
-        let config = try XrayConfigBuilder.tunnelConfig(outboundJSON: line.outboundJSON, socksPort: socksPort, probePort: probePort,
-                                                        assetDir: assets, xrayLogPath: store.xrayLogURL.path)
+        let entries = lines.map { (id: $0.id, outboundJSON: $0.outboundJSON, probePort: probePorts[$0.id] ?? Etha.probePortFallback) }
+        let config = try XrayConfigBuilder.autoConfig(lines: entries, socksPort: socksPort, apiPort: apiPort,
+                                                      assetDir: assets, xrayLogPath: store.xrayLogURL.path)
         try LibXrayBridge.runXray(configJSON: config)
+        try holdBalancer(to: line)
         active = line
-        probe = Probe(port: probePort)
         store.updateTunnelState { $0.activeLineId = line.id; $0.switchedTo = nil; $0.switchedAt = nil }
-        log.info("xray up on \(line.remark)")
+        log.info("xray up, \(lines.count) lines, on \(line.remark)")
+    }
+
+    /// The API inbound answers as soon as Xray runs; a dial that lands before it listens is tried again.
+    private func holdBalancer(to line: Line) throws {
+        var lastError: Error?
+        for attempt in 0..<5 {
+            do {
+                try LibXrayBridge.balancerOverride(api: "127.0.0.1:\(apiPort)", balancer: Etha.autoBalancerTag, target: XrayConfigBuilder.lineTag(line.id))
+                return
+            } catch {
+                lastError = error
+                Thread.sleep(forTimeInterval: 0.1 * Double(attempt + 1))
+            }
+        }
+        throw TunnelError.balancer("\(lastError.map { "\($0)" } ?? "?")")
     }
 
     /// hev-socks5-tunnel on the utun fd; its exit for any reason other than our stop takes the tunnel down.
@@ -134,51 +166,45 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func switchLine(to line: Line, reason: String) {
+    private func startEngine(on line: Line, policy: AutoPolicy) {
+        let members = lines.map { AutoEngine.Line(id: $0.id, remark: $0.remark, order: $0.order, probePort: probePorts[$0.id] ?? Etha.probePortFallback) }
+        let engine = AutoEngine(queue: queue, store: store, log: log, lines: members, policy: policy, apiPort: apiPort, current: line.id,
+                                traffic: { [weak self] in
+                                    let s = self?.hev.stats()
+                                    return (up: Int64(s?.txBytes ?? 0), down: Int64(s?.rxBytes ?? 0))
+                                },
+                                onSwitch: { [weak self] member, reason, byHand in self?.lineChanged(to: member, reason: reason, byHand: byHand) })
+        self.engine = engine
+        engine.start()
+    }
+
+    /// The engine moved new connections to another line: the App Group learns it; a move that is Auto's own (not the
+    /// customer's pick) becomes the selection and is said to the customer.
+    private func lineChanged(to member: AutoEngine.Line, reason: String, byHand: Bool) {
+        guard let line = lines.first(where: { $0.id == member.id }) else { return }
+        active = line
+        if !byHand, !store.selection.pinned { store.updateSelection { $0.selectedLineId = line.id } }
+        store.updateTunnelState { state in
+            state.activeLineId = line.id
+            if !byHand { state.switchedTo = line.displayName; state.switchedAt = Date() }
+        }
+    }
+
+    /// The memory guard: Xray restarted in place on the line in use (hev stays, apps reconnect), the balancer held again.
+    private func restartXrayInPlace() {
+        guard let line = lines.first(where: { $0.id == engine?.current }) ?? active else { return }
         reasserting = true
         try? LibXrayBridge.stopXray()
         do {
-            try startXray(line)
+            try startXray(on: line)
         } catch {
             reasserting = false
-            log.error("switch to \(line.remark) failed: \(error)")
+            log.error("restart on \(line.remark) failed: \(error)")
             cancelTunnelWithError(error)
             return
         }
         reasserting = false
-        if reason == "memory guard" { log.info("xray restarted in place on \(line.remark)"); return }
-        if !store.selection.pinned { store.updateSelection { $0.selectedLineId = line.id } }
-        store.updateTunnelState { $0.switchedTo = line.displayName; $0.switchedAt = Date() }
-        log.info("switched to \(line.remark): \(reason)")
-    }
-
-    // MARK: the watchdog
-
-    private func startWatchdog(lineCount: Int) {
-        guard lineCount >= 2, !store.selection.pinned else { log.info("watchdog off (pinned or a single line)"); return }
-        let wd = Watchdog(queue: queue,
-                          probe: { [weak self] in self?.probe?.measure() ?? -1 },
-                          onProbe: { [weak self] ms in self?.recordProbe(ms) },
-                          onFailure: { [weak self] tried in self?.rotate(tried: tried) ?? tried })
-        wd.start(after: Etha.watchdogInterval)
-        watchdog = wd
-    }
-
-    private func recordProbe(_ ms: Int64) {
-        store.updateTunnelState { $0.lastProbeMs = ms; $0.lastProbeAt = Date() }
-        if ms < 0 { log.warn("probe failed on \(active?.remark ?? "?")") }
-    }
-
-    /// Two misses in a row: the next line by the stored ranking (the extension cannot measure while Xray runs).
-    private func rotate(tried: Set<String>) -> Set<String> {
-        guard let current = active, let snapshot = store.loadSnapshot() else { return tried }
-        guard let next = LineRotation.next(current: current.id, tried: tried, lines: snapshot.lines, results: store.selection.results) else {
-            log.warn("watchdog: every line failed once, starting over")
-            return []
-        }
-        guard let line = snapshot.lines.first(where: { $0.id == next.id }) else { return next.tried }
-        switchLine(to: line, reason: "watchdog")
-        return next.tried
+        log.info("xray restarted in place on \(line.remark)")
     }
 
     private func startPathMonitor() {
@@ -187,8 +213,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self = self else { return }
             let satisfied = path.status == .satisfied
             if satisfied && !self.pathWasSatisfied {
-                self.log.info("network is back; probing in 15 s")
-                self.watchdog?.resume(after: 15)
+                self.log.info("network is back; measuring again in 15 s")
+                self.engine?.onNetworkChanged()
             }
             self.pathWasSatisfied = satisfied
         }
@@ -209,10 +235,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let s = self.hev.stats()
             let line = self.active?.remark ?? "?"
             let text = String(format: "memory %.1f MiB on %@, tx %.1f MiB rx %.1f MiB", mb, line, Double(s.txBytes) / 1_048_576, Double(s.rxBytes) / 1_048_576)
-            if mb >= self.guardMB, let current = self.active, Date().timeIntervalSince(self.lastGuardAt) > 45 {
+            if mb >= self.guardMB, Date().timeIntervalSince(self.lastGuardAt) > 45 {
                 self.lastGuardAt = Date()
                 self.log.warn(text + " — memory guard: restarting xray")
-                self.switchLine(to: current, reason: "memory guard")
+                self.restartXrayInPlace()
             } else if mb >= 38 {
                 self.log.warn(text)
             } else if self.memoryTicks % 6 == 1 {
@@ -228,23 +254,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         queue.async {
             let request = (try? JSONDecoder().decode(TunnelRequest.self, from: messageData)) ?? TunnelRequest(cmd: "status")
-            var reply = self.statusReply()
+            let answer: () -> Void = { completionHandler?(try? JSONEncoder().encode(self.statusReply())) }
             switch request.cmd {
             case "probe":
-                let ms = self.probe?.measure() ?? -1
-                self.recordProbe(ms)
-                reply = self.statusReply()
-            case "switch":
-                if let id = request.lineId, let line = self.store.loadSnapshot()?.lines.first(where: { $0.id == id }), line.id != self.active?.id {
-                    self.switchLine(to: line, reason: "app")
-                    reply = self.statusReply()
+                guard let engine = self.engine else { answer(); return }
+                engine.probeCurrent { ms in
+                    self.store.updateTunnelState { $0.lastProbeMs = ms; $0.lastProbeAt = Date() }
+                    if ms < 0 { self.log.warn("probe failed on \(self.active?.remark ?? "?")") }
+                    answer()
                 }
+            case "switch":
+                if let id = request.lineId, id != self.engine?.current { self.engine?.switchTo(id: id, reason: "app", byHand: true) }
+                answer()
+            case "ping":
+                guard let engine = self.engine else { answer(); return }
+                engine.pingAll { _ in answer() }
             case "logTail":
+                var reply = self.statusReply()
                 reply.log = self.log.tail(lines: request.lines ?? 200)
+                completionHandler?(try? JSONEncoder().encode(reply))
             default:
-                break
+                answer()
             }
-            completionHandler?(try? JSONEncoder().encode(reply))
         }
     }
 

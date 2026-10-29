@@ -12,6 +12,7 @@ public struct SubscriptionInfo: Codable, Equatable {
     public var webPageURL: String?
     public var updateIntervalMinutes: Int64?
     public var linkHops: String?           // the service's last X-Etha-Link-Hops ("host=ip,…"): where the link hop inside Iran is
+    public var autoPolicy: String?         // the service's last X-Etha-Auto: Auto's numbers over AutoPolicy's defaults
     public var infoUpdated: Date?
     public init() {}
 }
@@ -58,9 +59,12 @@ public struct Selection: Codable, Equatable {
     }
 }
 
-/// What the tunnel extension last reported, mirrored into the App Group for the app.
+/// What the tunnel extension last reported, mirrored into the App Group for the app. results: the extension's own
+/// measurements of the lines through the running core (line id → ms, -1 failed), lastRoundAt when they were made.
 public struct TunnelState: Codable, Equatable {
     public var activeLineId: String?
+    public var results: [String: Int64]?
+    public var lastRoundAt: Date?
     public var lastProbeMs: Int64?
     public var lastProbeAt: Date?
     public var switchedTo: String?

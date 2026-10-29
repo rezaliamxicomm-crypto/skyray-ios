@@ -135,6 +135,78 @@ public enum XrayConfigBuilder {
         return try serialize(config)
     }
 
+    /// Auto's tunnel config (AutoEngine): every line of the subscription as an outbound `line-<id>` behind one random
+    /// balancer, `Etha.autoBalancerTag`, which the extension holds to one line through the API inbound (libXray's
+    /// CGoBalancerOverride); a loopback HTTP inbound `probe-<id>` per line, routed to that line alone, for the
+    /// extension's measurements; the SOCKS inbound hev feeds; Iran-direct routing and the DNS split as tunnelConfig.
+    /// Every rule that sent traffic to the one line sends it to the balancer, and a last rule catches what no rule
+    /// matched (without it, Xray would take the first outbound, one line of the list).
+    public static func autoConfig(lines: [(id: String, outboundJSON: String, probePort: Int)], socksPort: Int, apiPort: Int,
+                                  assetDir: String, xrayLogPath: String, options: Options = Options()) throws -> String {
+        guard !lines.isEmpty else { throw BuildError.invalidOutbound }
+        var inbounds: [[String: Any]] = [
+            ["tag": "socks", "protocol": "socks", "listen": "127.0.0.1", "port": socksPort,
+             "settings": ["auth": "noauth", "udp": true, "userLevel": 8],
+             "sniffing": ["enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": false]],
+            ["tag": "api", "protocol": "dokodemo-door", "listen": "127.0.0.1", "port": apiPort, "settings": ["address": "127.0.0.1"]]
+        ]
+        var outbounds: [[String: Any]] = []
+        var rules: [[String: Any]] = [["type": "field", "inboundTag": ["api"], "outboundTag": "api"]]
+        for line in lines {
+            var proxy = try outbound(from: line.outboundJSON)
+            proxy["tag"] = lineTag(line.id)
+            if options.mux {
+                proxy["mux"] = ["enabled": true, "concurrency": options.muxConcurrency, "xudpConcurrency": 16, "xudpProxyUDP443": "reject"]
+            }
+            var chain = proxyOutbounds(proxy, options: options)
+            if chain.count == 2 { chain[1]["tag"] = "fragment-" + line.id; chain[0] = withSockopt(chain[0]) { $0["dialerProxy"] = "fragment-" + line.id } }
+            outbounds.append(contentsOf: chain)
+            inbounds.append(["tag": probeTag(line.id), "protocol": "http", "listen": "127.0.0.1", "port": line.probePort, "settings": ["userLevel": 8]])
+            rules.append(["type": "field", "inboundTag": [probeTag(line.id)], "outboundTag": lineTag(line.id)])
+        }
+        outbounds.append(["tag": "direct", "protocol": "freedom", "settings": ["domainStrategy": "UseIPv4"]])
+        outbounds.append(["tag": "block", "protocol": "blackhole", "settings": ["response": ["type": "http"]]])
+        outbounds.append(["tag": "dns-out", "protocol": "dns"])
+        rules.append(contentsOf: [
+            ["type": "field", "inboundTag": ["socks"], "port": "53", "network": "tcp,udp", "outboundTag": "dns-out"],
+            ["type": "field", "inboundTag": ["dns-module"], "ip": [options.directDNS], "outboundTag": "direct"],
+            ["type": "field", "inboundTag": ["dns-module"], "balancerTag": Etha.autoBalancerTag],
+            ["type": "field", "port": "443", "network": "udp", "outboundTag": "block"],
+            ["type": "field", "ip": ["geoip:private"], "outboundTag": "direct"],
+            ["type": "field", "domain": ["domain:ir", "geosite:category-ir"], "outboundTag": "direct"],
+            ["type": "field", "ip": ["geoip:ir"], "outboundTag": "direct"],
+            ["type": "field", "network": "tcp,udp", "balancerTag": Etha.autoBalancerTag]
+        ])
+        var dnsServers: [Any] = [
+            ["address": options.directDNS, "port": 53, "domains": ["geosite:category-ir", "domain:ir"], "skipFallback": true]
+        ]
+        dnsServers.append(contentsOf: options.proxyDNS)
+        let config: [String: Any] = [
+            "env": ["XRAY_LOCATION_ASSET": assetDir],
+            "log": ["loglevel": options.logLevel, "access": "none", "error": xrayLogPath, "dnsLog": false],
+            "api": ["tag": "api", "services": ["RoutingService"]],
+            "policy": [
+                "levels": ["8": ["handshake": 4, "connIdle": 300, "uplinkOnly": 1, "downlinkOnly": 1, "bufferSize": options.bufferSizeKB]],
+                "system": ["statsInboundUplink": false, "statsInboundDownlink": false, "statsOutboundUplink": false, "statsOutboundDownlink": false]
+            ],
+            "dns": ["tag": "dns-module", "queryStrategy": "UseIPv4", "servers": dnsServers],
+            "inbounds": inbounds,
+            "outbounds": outbounds,
+            "routing": [
+                "domainStrategy": "IPIfNonMatch",
+                "domainMatcher": "linear",
+                "balancers": [["tag": Etha.autoBalancerTag, "selector": [linePrefix], "strategy": ["type": "random"]]],
+                "rules": rules
+            ]
+        ]
+        return try serialize(config)
+    }
+
+    /// A line's outbound tag in Auto's config, and its probe inbound's.
+    public static let linePrefix = "line-"
+    public static func lineTag(_ id: String) -> String { linePrefix + id }
+    public static func probeTag(_ id: String) -> String { "probe-" + id }
+
     /// The test instance: one loopback HTTP inbound per line, routed to that line's outbound, so the app can send
     /// two requests down a kept-alive connection per line and keep the smaller time — what the Android app's
     /// library does, and why its numbers are the warm round trip rather than handshakes plus a request. Bound to

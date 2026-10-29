@@ -80,7 +80,7 @@ struct HeroView: View {
     private var chipText: String? {
         guard let line = model.currentLine else { return nil }
         let name = model.tunnel?.lineName.map { LineName.display($0) } ?? line.displayName
-        let ms = (model.tunnel?.lastProbeMs).flatMap { $0 > 0 ? $0 : nil } ?? model.selection.delay(of: line.id)
+        let ms = (model.tunnel?.lastProbeMs).flatMap { $0 > 0 ? $0 : nil } ?? model.delay(of: line.id)
         return ms > 0 ? "\(name) · \(ms) ms" : name
     }
 }
