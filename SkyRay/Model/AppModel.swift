@@ -94,6 +94,9 @@ final class AppModel: ObservableObject {
     func onLaunch() async {
         guard !launched else { return }
         launched = true
+        // The declaration screen is no longer shown (Apple's review, 2026-10-29): count it as accepted, so the
+        // first-open imports below run as before. acceptDeclaration() and the flag stay for the day it returns.
+        if !store.declarationAccepted { acceptDeclaration() }
         // Every open starts in Auto (fastest): a line picked from the menu is pinned for the session only.
         if store.selection.pinned { store.updateSelection { $0.pinned = false }; AppLog.info("launch: back to Auto") }
         await vpn.load()

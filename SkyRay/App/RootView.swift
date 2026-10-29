@@ -3,12 +3,11 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
 
+    /// The first-open declaration screen (DeclarationView) is not shown since Apple's review asked for it to go
+    /// (2026-10-29): the app collects nothing to declare. The screen, its texts and the accepted flag stay in the
+    /// code; AppModel marks the flag accepted at launch so the first-open imports still run.
     var body: some View {
-        if model.declarationAccepted {
-            MainView()
-        } else {
-            DeclarationView()
-        }
+        MainView()
     }
 }
 
