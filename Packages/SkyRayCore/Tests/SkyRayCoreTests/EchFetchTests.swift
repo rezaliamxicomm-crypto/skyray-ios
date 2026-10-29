@@ -2,8 +2,10 @@ import XCTest
 @testable import SkyRayCore
 
 final class EchFetchTests: XCTestCase {
+    /// A line as the importer makes one: its transport read from the link's type (the real one comes from the remark).
     private func line(_ id: String, _ link: String, order: Int = 0) -> Line {
-        Line(id: id, link: link, remark: id, transport: nil, endpointLabel: nil, port: nil, order: order, outboundJSON: "{}")
+        let transport = link.contains("type=ws") ? "WS" : (link.contains("type=xhttp") ? "XHTTP" : nil)
+        return Line(id: id, link: link, remark: id, transport: transport, endpointLabel: nil, port: nil, order: order, outboundJSON: "{}")
     }
 
     func testAddressOfAShareLink() {
