@@ -35,7 +35,8 @@ struct SubscriptionImporter {
         let kind: String          // ech | tunnel | hop: what is remembered per network
         let startAfterMs: Int64
         let request: EchFetchRequest
-        var answered: (EchFetchResult) -> Bool { kind == "hop" ? { $0.plainAnswered } : { $0.answered } }
+        /// The server answered on this way — any status (the hop answers plain, the ECH ways with ECH accepted).
+        func answered(_ r: EchFetchResult) -> Bool { kind == "hop" ? r.plainAnswered : r.answered }
     }
 
     /// "cell", "wifi" or "other": the network the phone is on, for remembering which way answered first there.
@@ -82,7 +83,8 @@ struct SubscriptionImporter {
         let ways = Self.ways(url: url, token: EthaLink.token(of: url), stored: stored, hops: known.isEmpty ? Etha.linkHops : known,
                              tunnelUp: tunnelUp, physical: NetworkInterfaces.physical(), headers: headers,
                              hopHeadStartMs: EchFetch.hopHeadStartMs(rememberedWay: store.fetchWay(on: network)), userAgent: Self.userAgent)
-        if let (way, result) = await Self.race(ways) {
+        if let winner = await Self.race(ways) {
+            let (way, result) = winner
             AppLog.info("fetch: \(way.name) answered first via \(result.address) (key: \(result.keySource)), status \(result.status); network \(network)")
             store.rememberFetchWay(way.kind, on: network)
             if !report.isEmpty { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
