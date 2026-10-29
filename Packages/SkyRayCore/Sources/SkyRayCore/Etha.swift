@@ -12,6 +12,8 @@ public enum Etha {
     /// in the header X-Etha-Link-Hops ("host=ip,host=ip"), else at linkHops — so the spare name can take over without
     /// a release. The same values as the Android app's AppConfig.ETHA_HOP_SUB_HOSTS / ETHA_LINK_HOPS.
     public static let hopSubHosts = ["www.harlow-systems.org", "harlow-systems.org", "www.selvanemetricsz.com", "selvanemetricsz.com"]
+    /// The transports whose lines dial a Cloudflare address: only those addresses serve the ECH fetch (a relay answers with its cover site).
+    public static let cloudflareTransports: Set<String> = ["XHTTP", "SPLITHTTP", "WS", "HTTPUPGRADE"]
     public static let linkHops = [LinkHop(host: "www.harlow-systems.org", ip: "185.83.210.148")]
     public static let linkHopsHeader = "x-etha-link-hops"
     public static let hopTimeoutMs: Int64 = 12_000
@@ -41,8 +43,14 @@ public enum Etha {
     /// Auto (AutoPolicy, AutoEngine): the service's header with the numbers, the balancer's tag in the tunnel's config.
     public static let autoHeader = "x-etha-auto"
     public static let autoBalancerTag = "auto"
-    public static let probeURL = "https://www.gstatic.com/generate_204"
-    public static let probeFallbackURL = "https://www.google.com/generate_204"
+    /// Auto measures every line with two HEAD requests to the box's own probe target (a TEST-NET address Xray on the box
+    /// sends to a 204 on loopback: no third party, no TLS); the fallback is tried once when no line answers the target.
+    public static let probeURL = "http://203.0.113.1/"
+    public static let probeFallbackURL = "https://www.gstatic.com/generate_204"
+    /// What Auto measured, sent on the next subscription fetch as this header (LineReport); the box stores it.
+    public static let linesHeader = "X-Etha-Lines"
+    /// The hop starts this long after the two ECH ways on a fetch — at once on a network where it answered last time.
+    public static let hopHeadStartMs: Int64 = 3_000
     public static let pingTimeoutSeconds = 8
     public static let connectGuard: TimeInterval = 25
 

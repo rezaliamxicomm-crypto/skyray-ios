@@ -2,7 +2,7 @@ import Foundation
 
 /// App → tunnel requests (sendProviderMessage) and the tunnel's replies, as JSON.
 public struct TunnelRequest: Codable, Equatable {
-    public var cmd: String            // status | probe | switch | ping | logTail
+    public var cmd: String            // status | probe | ping | reload | logTail (switch: an older app's pick, ignored since 2.0.0)
     public var lineId: String?
     public var lines: Int?
     public init(cmd: String, lineId: String? = nil, lines: Int? = nil) { self.cmd = cmd; self.lineId = lineId; self.lines = lines }
@@ -12,6 +12,8 @@ public struct TunnelRequest: Codable, Equatable {
     /// Every line measured through the running core now, and the best taken by Auto's rules (AutoEngine).
     public static let ping = TunnelRequest(cmd: "ping")
     public static func logTail(_ n: Int) -> TunnelRequest { TunnelRequest(cmd: "logTail", lines: n) }
+    /// The subscription on disk changed (a fetch brought other lines): Xray restarts on them, the engine with it.
+    public static let reload = TunnelRequest(cmd: "reload")
 }
 
 /// Every field optional on the wire: an older or newer tunnel's reply still decodes, and `{}` means "ok".
@@ -28,10 +30,14 @@ public struct TunnelReply: Codable, Equatable {
     public var xrayVersion: String?
     public var log: String?
     public var error: String?
+    public var searching: Bool?           // no line answers; Auto keeps measuring (2.0.0)
+    public var latencyMs: Int64?          // the line in use's last time, -1 failed
+    public var latencyAt: Date?
+    public var outcome: String?           // of a "ping": switched | kept | none
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case ok, state, lineId, lineName, lastProbeMs, lastProbeAt, footprintMB, switchedTo, switchedAt, xrayVersion, log, error
+        case ok, state, lineId, lineName, lastProbeMs, lastProbeAt, footprintMB, switchedTo, switchedAt, xrayVersion, log, error, searching, latencyMs, latencyAt, outcome
     }
 
     public init(from decoder: Decoder) throws {
@@ -48,5 +54,9 @@ public struct TunnelReply: Codable, Equatable {
         xrayVersion = try c.decodeIfPresent(String.self, forKey: .xrayVersion)
         log = try c.decodeIfPresent(String.self, forKey: .log)
         error = try c.decodeIfPresent(String.self, forKey: .error)
+        searching = try c.decodeIfPresent(Bool.self, forKey: .searching)
+        latencyMs = try c.decodeIfPresent(Int64.self, forKey: .latencyMs)
+        latencyAt = try c.decodeIfPresent(Date.self, forKey: .latencyAt)
+        outcome = try c.decodeIfPresent(String.self, forKey: .outcome)
     }
 }

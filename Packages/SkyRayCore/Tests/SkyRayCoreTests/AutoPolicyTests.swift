@@ -64,4 +64,15 @@ final class AutoPolicyTests: XCTestCase {
         XCTAssertEqual(AutoPolicy.parse("margin=30", base: q).marginPct, 30)
         XCTAssertEqual(AutoPolicy.parse("margin=30", base: q).roundSec, 120)
     }
+
+    func testTheSearchingCadenceComesFromTheHeaderToo() {
+        XCTAssertEqual(AutoPolicy().searchSec, 60)
+        XCTAssertEqual(AutoPolicy().searchFetchSec, 300)
+        let q = AutoPolicy.parse("search=30,sfetch=120")
+        XCTAssertEqual(q.searchSec, 30)
+        XCTAssertEqual(q.searchFetchSec, 120)
+        let clamped = AutoPolicy.parse("search=1,sfetch=99999")
+        XCTAssertEqual(clamped.searchSec, 15)
+        XCTAssertEqual(clamped.searchFetchSec, 3600)
+    }
 }

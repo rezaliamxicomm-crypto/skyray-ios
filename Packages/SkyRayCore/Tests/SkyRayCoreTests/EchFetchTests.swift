@@ -59,7 +59,8 @@ final class EchFetchTests: XCTestCase {
         // the core reads these keys by name (echfetch.go's json tags): a renamed property would arrive empty
         let json = try XCTUnwrap(request.json())
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), ["url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs", "interface", "plain"])
+        XCTAssertEqual(Set(object.keys), ["url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs", "interface", "plain", "headers"])
+        XCTAssertEqual(object["headers"] as? [String: String], [:])             // no report to carry: an empty map, the core ignores it
         XCTAssertEqual(object["plain"] as? Bool, false)                 // the ECH ways never ask for the plain one
         XCTAssertEqual(object["url"] as? String, "https://fra.skyrayconfig.org/sub/0123456789abcdef")
         XCTAssertEqual(object["userAgent"] as? String, "SkyRay/1.3.6 (ios)")
@@ -137,5 +138,30 @@ final class EchFetchTests: XCTestCase {
         XCTAssertTrue(r.plainAnswered); XCTAssertFalse(r.answered); XCTAssertEqual(r.failure, "status 403")
         r.error = "plain: dial"; XCTAssertFalse(r.plainAnswered)
         var e = EchFetchResult(); e.status = 0; XCTAssertFalse(e.plainAnswered)
+    }
+
+    func testTheReportTravelsAsAHeaderOnEveryWayAndTheHopWaitsForEch() throws {
+        let h = ["X-Etha-Lines": "v=1;t=1;trig=manual;use=;sw=0;l=XHTTP-api-CleanIP1-443:200"]
+        let direct = EchFetch.request(url: "https://fra.skyrayconfig.org/sub/0123456789abcdef", stored: [], userAgent: "x", headers: h)
+        XCTAssertEqual(direct.headers, h)
+        let hop = EchFetch.hopRequest(token: "0123456789abcdef", hop: LinkHop(host: "www.harlow-systems.org", ip: "185.83.210.148"), userAgent: "x", headers: h)
+        XCTAssertEqual(hop.headers, h)
+        XCTAssertTrue(hop.plain)
+        let json = try XCTUnwrap(direct.json())
+        XCTAssertTrue(json.contains("\"headers\":{\"X-Etha-Lines\":"))
+        XCTAssertEqual(EchFetch.hopHeadStartMs(rememberedWay: nil), Etha.hopHeadStartMs)
+        XCTAssertEqual(EchFetch.hopHeadStartMs(rememberedWay: "ech"), Etha.hopHeadStartMs)
+        XCTAssertEqual(EchFetch.hopHeadStartMs(rememberedWay: "hop"), 0)
+    }
+
+    func testOnlyTheCloudflareLinesLendTheirAddresses() {
+        // since 2026-10-24 the first lines are the relays: their addresses answer with a cover site, never with ECH
+        func line(_ id: String, _ transport: String?, _ address: String, order: Int) -> Line {
+            Line(id: id, link: "vless://u@\(address):443?type=tcp#x", remark: id, transport: transport, endpointLabel: nil, port: 443, order: order, outboundJSON: "{}")
+        }
+        let lines = [line("r1", "REALITY", "45.1.2.3", order: 0), line("x1", "XHTTP", "104.21.67.176", order: 1),
+                     line("w1", "WS", "172.67.179.3", order: 2), line("u", nil, "1.2.3.4", order: 3)]
+        XCTAssertEqual(EchFetch.storedAddresses(lines: lines, selectedLineId: "r1"), ["104.21.67.176", "172.67.179.3"])
+        XCTAssertEqual(EchFetch.storedAddresses(lines: lines, selectedLineId: "w1"), ["172.67.179.3", "104.21.67.176"])
     }
 }

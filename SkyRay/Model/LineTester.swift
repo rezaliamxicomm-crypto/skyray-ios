@@ -18,9 +18,21 @@ enum LineTester {
         let started = await start(config)
         guard started else { AppLog.warn("test: the test instance did not start"); return results }
         defer { Task.detached(priority: .utility) { try? LibXrayBridge.stopXray() } }
+        results = await round(lines, ports, url: Etha.probeURL)
+        if results.values.allSatisfy({ $0 < 0 }) {
+            // a box without the probe target yet: the old target once
+            let again = await round(lines, ports, url: Etha.probeFallbackURL)
+            if again.values.contains(where: { $0 > 0 }) { AppLog.warn("test: the probe target gave no answer on any line; the fallback did"); results = again }
+        }
+        return results
+    }
+
+    private static func round(_ lines: [Line], _ ports: [Int], url: String) async -> [String: Int64] {
+        var results: [String: Int64] = [:]
+        for line in lines { results[line.id] = -1 }
         await withTaskGroup(of: (String, Int64).self) { group in
             for (line, port) in zip(lines, ports) {
-                group.addTask { (line.id, await measure(port: port)) }
+                group.addTask { (line.id, await measure(port: port, url: url)) }
             }
             for await (id, ms) in group { results[id] = ms }
         }
@@ -38,7 +50,7 @@ enum LineTester {
     }
 
     /// Two requests through the line's loopback inbound; the smaller time in ms, -1 when neither answered.
-    private static func measure(port: Int) async -> Int64 {
+    private static func measure(port: Int, url urlString: String) async -> Int64 {
         let config = URLSessionConfiguration.ephemeral
         config.connectionProxyDictionary = [
             "HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": port,
@@ -50,7 +62,7 @@ enum LineTester {
         config.urlCache = nil
         let session = URLSession(configuration: config)
         defer { session.finishTasksAndInvalidate() }
-        guard let url = URL(string: Etha.probeURL) else { return -1 }
+        guard let url = URL(string: urlString) else { return -1 }
         var best: Int64 = -1
         for _ in 0..<attempts {
             var request = URLRequest(url: url)

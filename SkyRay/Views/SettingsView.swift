@@ -3,20 +3,15 @@ import SkyRayCore
 
 /// The Android settings screen (res/layout/activity_etha_settings.xml): plain rows on the background — an icon,
 /// a 16 pt title, a 13 pt summary. The rows Android has and iOS cannot (apps that bypass the VPN, check for
-/// update) are left out; the rest keep their order.
+/// update) are left out; the rest keep their order. No line is picked here (2.0.0): the customer sees no line name.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var confirmDelete = false
     @State private var showLogs = false
-    @State private var showServers = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Button { showServers = true } label: {
-                    row("antenna.radiowaves.left.and.right", L("server.pick"), model.serverLabel)
-                }
-                .disabled(!model.hasSubscription)
                 Button { open(UIApplication.openSettingsURLString) } label: {
                     row("globe", L("language"), Locale.current.localizedString(forLanguageCode: appLanguage) ?? L("language.system"))
                 }
@@ -38,7 +33,6 @@ struct SettingsView: View {
             Text(L("delete.confirm"))
         }
         .sheet(isPresented: $showLogs) { LogShareSheet(urls: logURLs) }
-        .sheet(isPresented: $showServers) { ServerSheet().environmentObject(model) }
     }
 
     private var logURLs: [URL] {

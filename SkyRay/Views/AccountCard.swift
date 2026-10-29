@@ -1,7 +1,7 @@
 import SwiftUI
 import SkyRayCore
 
-/// The account as on Android: two tiles (days, data with its bar), the "Updated <ago>" line with the Refresh pill,
+/// The account as on Android: two tiles (days, data with its bar), the "Updated <ago>" line (Refresh is in the hero since 2.0.0),
 /// the announcement, then Support. Android's row is Renew | Support; the App Store forbids a button that leads to a
 /// purchase outside it, and renewals happen in Telegram, so here Support stands alone.
 struct AccountCard: View {
@@ -25,16 +25,8 @@ struct AccountCard: View {
             }
             HStack {
                 Text(updatedText).font(AppFont.chip).foregroundColor(.muted)
+                if model.refreshing { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
                 Spacer(minLength: 0)
-                Button { Task { await model.refreshNow() } } label: {
-                    HStack(spacing: 6) {
-                        if model.refreshing { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
-                        else { Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold)) }
-                        Text(L("refresh"))
-                    }
-                }
-                .buttonStyle(EthaPillButtonStyle())
-                .disabled(model.refreshing)
             }
             .padding(.leading, 4)
             .padding(.top, 10)

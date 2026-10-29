@@ -13,12 +13,13 @@ public struct EchFetchRequest: Codable, Equatable {
     public var timeoutMs: Int64
     public var interface: String            // bind every socket to it (the phone's own, past a running tunnel); "" = no binding
     public var plain: Bool                  // no ECH: a plain TLS fetch to `addresses`, the url's host as the certificate's name (the link hop inside Iran)
+    public var headers: [String: String]    // extra request headers, every way (X-Etha-Lines: what Auto measured)
 
     public init(url: String, addresses: [String], pinnedAddresses: [String], resolvers: [String], lookupName: String,
-                pinnedKey: String, userAgent: String, timeoutMs: Int64, interface: String, plain: Bool = false) {
+                pinnedKey: String, userAgent: String, timeoutMs: Int64, interface: String, plain: Bool = false, headers: [String: String] = [:]) {
         self.url = url; self.addresses = addresses; self.pinnedAddresses = pinnedAddresses; self.resolvers = resolvers
         self.lookupName = lookupName; self.pinnedKey = pinnedKey; self.userAgent = userAgent
-        self.timeoutMs = timeoutMs; self.interface = interface; self.plain = plain
+        self.timeoutMs = timeoutMs; self.interface = interface; self.plain = plain; self.headers = headers
     }
 
     /// The JSON text the core reads.
@@ -122,9 +123,9 @@ public enum EchFetch {
         return out
     }
 
-    /// The addresses the stored lines dial, the selected line's first. Our lines dial clean Cloudflare addresses.
+    /// The addresses the stored Cloudflare lines dial, the selected line's first; a relay's (since 2026-10-24 the first lines) is never offered.
     public static func storedAddresses(lines: [Line], selectedLineId: String?) -> [String] {
-        var ordered = lines
+        var ordered = lines.filter { Etha.cloudflareTransports.contains(($0.transport ?? "").uppercased()) }
         if let id = selectedLineId, let index = ordered.firstIndex(where: { $0.id == id }) {
             let selected = ordered.remove(at: index)
             ordered.insert(selected, at: 0)
@@ -134,11 +135,14 @@ public enum EchFetch {
 
     /// The request the core gets. interface: the phone's own interface to leave by while our tunnel is up, "" otherwise.
     public static func request(url: String, stored: [String], userAgent: String, interface: String = "",
-                               timeoutMs: Int64 = EchFetch.timeoutMs) -> EchFetchRequest {
+                               timeoutMs: Int64 = EchFetch.timeoutMs, headers: [String: String] = [:]) -> EchFetchRequest {
         EchFetchRequest(url: url, addresses: candidateAddresses(stored), pinnedAddresses: Etha.echAddresses,
                         resolvers: Etha.echResolvers, lookupName: Etha.echLookupName, pinnedKey: Etha.echPinnedKey,
-                        userAgent: userAgent, timeoutMs: timeoutMs, interface: interface)
+                        userAgent: userAgent, timeoutMs: timeoutMs, interface: interface, headers: headers)
     }
+
+    /// Pure: the hop's head start on a network — none where it answered first last time (SubscriptionImporter).
+    public static func hopHeadStartMs(rememberedWay: String?) -> Int64 { rememberedWay == "hop" ? 0 : Etha.hopHeadStartMs }
 
     // ---- the link hop inside Iran (the plain way, after the two ECH ways)
 
@@ -174,8 +178,8 @@ public enum EchFetch {
 
     /// The request for a hop: its address of the token, its address dialled, no ECH; interface as for the ECH ways.
     public static func hopRequest(token: String, hop: LinkHop, userAgent: String, interface: String = "",
-                                  timeoutMs: Int64 = Etha.hopTimeoutMs) -> EchFetchRequest {
+                                  timeoutMs: Int64 = Etha.hopTimeoutMs, headers: [String: String] = [:]) -> EchFetchRequest {
         EchFetchRequest(url: "https://\(hop.host)\(Etha.subPath)\(token)", addresses: [hop.ip], pinnedAddresses: [], resolvers: [],
-                        lookupName: "", pinnedKey: "", userAgent: userAgent, timeoutMs: timeoutMs, interface: interface, plain: true)
+                        lookupName: "", pinnedKey: "", userAgent: userAgent, timeoutMs: timeoutMs, interface: interface, plain: true, headers: headers)
     }
 }

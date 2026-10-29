@@ -72,5 +72,9 @@ public struct TunnelState: Codable, Equatable {
     public var footprintMB: Double?
     public var xrayVersion: String?
     public var startedAt: Date?
+    public var searching: Bool?           // no line answers (2.0.0)
+    public var latencyMs: Int64?          // the line in use's last time, -1 failed
+    public var latencyAt: Date?
+    public var lineReport: String?        // what Auto measured last (LineReport), for the next fetch; cleared once sent
     public init() {}
 }

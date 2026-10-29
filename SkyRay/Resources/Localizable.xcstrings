@@ -859,19 +859,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No server answered. Check your internet and try again."
+            "value": "No line answered. Check your internet and try again."
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "هیچ سروری پاسخ نداد. اینترنت را بررسی کنید و دوباره امتحان کنید."
+            "value": "هیچ خطی جواب نداد. اینترنت را بررسی کنید و دوباره امتحان کنید."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ни один сервер не ответил. Проверьте интернет и повторите."
+            "value": "Ни одна линия не ответила. Проверьте интернет и попробуйте снова."
           }
         }
       }
@@ -1879,19 +1879,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Auto picks the fastest server"
+            "value": "The fastest line is picked for you"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "«خودکار» سریع‌ترین سرور را انتخاب می‌کند"
+            "value": "سریع‌ترین خط خودکار انتخاب می‌شود"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Авто выбирает самый быстрый сервер"
+            "value": "Самая быстрая линия выбирается автоматически"
           }
         }
       }
@@ -1936,6 +1936,259 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ещё не обновлялось"
+          }
+        }
+      }
+    },
+    "test.latency": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test latency"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تست تأخیر"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить задержку"
+          }
+        }
+      }
+    },
+    "testing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Testing…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در حال تست…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка…"
+          }
+        }
+      }
+    },
+    "state.searching": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching for a line…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در جستجوی خط…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск линии…"
+          }
+        }
+      }
+    },
+    "no.line.answers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No line answers"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "هیچ خطی جواب نمی‌دهد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ни одна линия не отвечает"
+          }
+        }
+      }
+    },
+    "searching.hint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap Refresh. Still nothing? Tap Support."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "«بروزرسانی» را بزنید. باز هم نشد؟ «پشتیبانی» را بزنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите «Обновить». Не помогло? Нажмите «Поддержка»."
+          }
+        }
+      }
+    },
+    "switched.faster": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switched to a faster line"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "به خط سریع‌تری رفت"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Переключено на более быструю линию"
+          }
+        }
+      }
+    },
+    "on.fastest": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On the fastest line"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "روی سریع‌ترین خط هستید"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы на самой быстрой линии"
+          }
+        }
+      }
+    },
+    "ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready · the fastest line is set for the next connect"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "آماده · سریع‌ترین خط برای اتصال بعدی انتخاب شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово · самая быстрая линия выбрана для следующего подключения"
+          }
+        }
+      }
+    },
+    "ready.ms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready · %lld ms"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "آماده · %lld میلی‌ثانیه"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово · %lld мс"
+          }
+        }
+      }
+    },
+    "just.now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "just now"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "همین حالا"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "только что"
+          }
+        }
+      }
+    },
+    "refreshed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configs updated"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "کانفیگ‌ها بروز شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Конфиги обновлены"
           }
         }
       }

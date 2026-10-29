@@ -29,23 +29,6 @@ final class BodyAndNamesTests: XCTestCase {
         XCTAssertEqual(p.transport, "XHTTP"); XCTAssertEqual(p.label, "CleanIP7"); XCTAssertEqual(p.port, 2053)
         XCTAssertNil(LineName.parse("EthaVPN-XHTTP-cdn-CleanIP7"))
     }
-    func testServerRows() {
-        let names = ["a": "EthaVPN-XHTTP-fra-CleanIP1-443", "b": "EthaVPN-WS-fra-CleanIP2-443", "c": "EthaVPN-XHTTP-fra-Domain-2053", "d": "Custom line"]
-        let rows = ServerRows.rows([.init(id: "a", delayMs: 120, order: 0), .init(id: "b", delayMs: 0, order: 1), .init(id: "c", delayMs: -1, order: 2), .init(id: "d", delayMs: 80, order: 3)],
-                                   nameOf: { names[$0]! }, auto: "Auto (fastest)", untested: "not tested", failed: "failed")
-        XCTAssertEqual(rows.count, 5)
-        XCTAssertNil(rows[0].id); XCTAssertEqual(rows[0].text, "Auto (fastest)")
-        XCTAssertEqual(rows.dropFirst().map { $0.id }, ["d", "a", "b", "c"])
-        XCTAssertEqual(rows[1].text, "80 ms  ·  Custom line")
-        XCTAssertEqual(rows[2].text, "120 ms  ·  CleanIP1 · XHTTP/443")
-        XCTAssertEqual(rows[3].text, "not tested  ·  CleanIP2 · WS/443")
-        XCTAssertEqual(rows[4].text, "failed  ·  Domain · XHTTP/2053")
-        XCTAssertEqual(ServerRows.currentLabel(pinned: true, currentName: "EthaVPN-WS-fra-Domain-443", auto: "Auto", autoPicked: { "Auto · \($0)" }), "Domain · WS/443")
-        XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: "EthaVPN-WS-fra-Domain-443", auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto · Domain · WS/443")
-        XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: nil, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto")
-        XCTAssertEqual(ServerRows.currentLabel(pinned: false, currentName: "EthaVPN-WS-fra-Domain-443", delayMs: 95, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Auto · Domain · WS/443 (95 ms)")
-        XCTAssertEqual(ServerRows.currentLabel(pinned: true, currentName: "EthaVPN-WS-fra-Domain-443", delayMs: 95, auto: "Auto", autoPicked: { "Auto · \($0)" }), "Domain · WS/443 (95 ms)")
-    }
     func testMessagesRoundTrip() throws {
         let req = TunnelRequest.switchTo("abc")
         let data = try JSONEncoder().encode(req)

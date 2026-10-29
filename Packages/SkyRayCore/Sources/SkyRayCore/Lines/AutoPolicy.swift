@@ -4,8 +4,8 @@ import Foundation
 /// line of the subscription behind one balancer; the extension measures the lines through that core (AutoEngine) and
 /// holds the balancer to the best, so a change of line moves new connections only and cuts nothing that is open. The
 /// numbers here are the policy's defaults; the service's header X-Etha-Auto ("round=180,failed=900,idle=600,
-/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600") replaces any of them on the next fetch, so they change
-/// without a release.
+/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600,search=60,sfetch=300") replaces any of them on the next
+/// fetch, so they change without a release.
 public struct AutoPolicy: Equatable, Codable {
     /// every line measured again this often, while the tunnel is in use
     public var roundSec: Int = 180
@@ -25,13 +25,17 @@ public struct AutoPolicy: Equatable, Codable {
     public var concurrency: Int = 8
     /// results younger than this are trusted at Connect
     public var freshSec: Int = 600
+    /// no line answers (the Searching state): every line measured again this often, in use or not
+    public var searchSec: Int = 60
+    /// …and the subscription fetched again this often, for lines the box may have replaced
+    public var searchFetchSec: Int = 300
 
     public init() {}
     public init(roundSec: Int, failedRetrySec: Int, idleSec: Int, marginPct: Int, floorMs: Int, stallSec: Int,
-                probeTimeoutSec: Int, concurrency: Int, freshSec: Int) {
+                probeTimeoutSec: Int, concurrency: Int, freshSec: Int, searchSec: Int = 60, searchFetchSec: Int = 300) {
         self.roundSec = roundSec; self.failedRetrySec = failedRetrySec; self.idleSec = idleSec; self.marginPct = marginPct
         self.floorMs = floorMs; self.stallSec = stallSec; self.probeTimeoutSec = probeTimeoutSec; self.concurrency = concurrency
-        self.freshSec = freshSec
+        self.freshSec = freshSec; self.searchSec = searchSec; self.searchFetchSec = searchFetchSec
     }
 
     public static let `default` = AutoPolicy()
@@ -102,6 +106,8 @@ public struct AutoPolicy: Equatable, Codable {
             case "timeout": p.probeTimeoutSec = min(max(v, 2), 30)
             case "conc": p.concurrency = min(max(v, 1), 64)
             case "fresh": p.freshSec = min(max(v, 0), 86400)
+            case "search": p.searchSec = min(max(v, 15), 600)
+            case "sfetch": p.searchFetchSec = min(max(v, 60), 3600)
             default: break
             }
         }

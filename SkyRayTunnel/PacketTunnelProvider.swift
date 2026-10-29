@@ -71,7 +71,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                         try self.startXray(on: line)
                         self.startHev()
                         let version = LibXrayBridge.xrayVersion()
-                        self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version; $0.results = nil; $0.lastRoundAt = nil }
+                        self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version; $0.results = nil; $0.lastRoundAt = nil
+                                                       $0.searching = nil; $0.latencyMs = nil; $0.latencyAt = nil }
                         self.log.info("tunnel up: xray \(version), fd \(fd), socks \(self.socksPort), api \(self.apiPort)")
                         self.startEngine(on: line, policy: AutoPolicy.parse(snapshot.info.autoPolicy))
                         self.startMemoryLog()
@@ -96,7 +97,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.hev.stop()
             try? LibXrayBridge.stopXray()
             self.active = nil
-            self.store.updateTunnelState { $0.activeLineId = nil; $0.startedAt = nil }
+            self.store.updateTunnelState { $0.activeLineId = nil; $0.startedAt = nil; $0.searching = nil; $0.latencyMs = nil }
             self.log.info("tunnel down: reason \(reason.rawValue)")
             completionHandler()
         }
@@ -173,21 +174,51 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                                     let s = self?.hev.stats()
                                     return (up: Int64(s?.txBytes ?? 0), down: Int64(s?.rxBytes ?? 0))
                                 },
-                                onSwitch: { [weak self] member, reason, byHand in self?.lineChanged(to: member, reason: reason, byHand: byHand) })
+                                onSwitch: { [weak self] member, reason in self?.lineChanged(to: member, reason: reason) })
         self.engine = engine
         engine.start()
     }
 
-    /// The engine moved new connections to another line: the App Group learns it; a move that is Auto's own (not the
-    /// customer's pick) becomes the selection and is said to the customer.
-    private func lineChanged(to member: AutoEngine.Line, reason: String, byHand: Bool) {
+    /// The engine moved new connections to another line: the App Group learns it and it becomes the selection (the
+    /// line the next Connect starts on). The customer is not told which line (2.0.0): only the latency changes.
+    private func lineChanged(to member: AutoEngine.Line, reason: String) {
         guard let line = lines.first(where: { $0.id == member.id }) else { return }
         active = line
-        if !byHand, !store.selection.pinned { store.updateSelection { $0.selectedLineId = line.id } }
+        store.updateSelection { $0.selectedLineId = line.id }
         store.updateTunnelState { state in
             state.activeLineId = line.id
-            if !byHand { state.switchedTo = line.displayName; state.switchedAt = Date() }
+            state.switchedTo = line.displayName; state.switchedAt = Date()
         }
+    }
+
+    /// The app fetched the subscription again and the lines changed: Xray restarts in place on the new set (hev stays,
+    /// apps reconnect), the engine with it — the line in use kept when it is still there, else the first. The SOCKS and
+    /// API ports stay (hev is bound to the first); a new line gets a probe port of its own.
+    private func reloadLines() {
+        guard let snapshot = store.loadSnapshot(), !snapshot.lines.isEmpty else { log.warn("reload: no subscription"); return }
+        let fresh = snapshot.lines.sorted { $0.order < $1.order }
+        let keep = fresh.first { $0.id == engine?.current } ?? fresh.first { $0.id == active?.id } ?? fresh[0]
+        engine?.stop(); engine = nil
+        lines = fresh
+        let missing = lines.filter { probePorts[$0.id] == nil }
+        if !missing.isEmpty {
+            let ports = (try? LibXrayBridge.getFreePorts(missing.count)) ?? missing.indices.map { Etha.probePortFallback + 64 + $0 }
+            for (line, port) in zip(missing, ports) { probePorts[line.id] = port }
+        }
+        reasserting = true
+        try? LibXrayBridge.stopXray()
+        do {
+            try startXray(on: keep)
+        } catch {
+            reasserting = false
+            log.error("reload on \(keep.remark) failed: \(error)")
+            cancelTunnelWithError(error)
+            return
+        }
+        reasserting = false
+        store.updateTunnelState { $0.results = nil; $0.lastRoundAt = nil; $0.searching = nil }
+        startEngine(on: keep, policy: AutoPolicy.parse(snapshot.info.autoPolicy))
+        log.info("reload: xray restarted on \(fresh.count) lines, on \(keep.remark)")
     }
 
     /// The memory guard: Xray restarted in place on the line in use (hev stays, apps reconnect), the balancer held again.
@@ -263,12 +294,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     if ms < 0 { self.log.warn("probe failed on \(self.active?.remark ?? "?")") }
                     answer()
                 }
-            case "switch":
-                if let id = request.lineId, id != self.engine?.current { self.engine?.switchTo(id: id, reason: "app", byHand: true) }
-                answer()
             case "ping":
                 guard let engine = self.engine else { answer(); return }
-                engine.pingAll { _ in answer() }
+                engine.pingAll { outcome in
+                    var reply = self.statusReply()
+                    reply.outcome = outcome
+                    completionHandler?(try? JSONEncoder().encode(reply))
+                }
+            case "reload":
+                self.reloadLines()
+                answer()
             case "logTail":
                 var reply = self.statusReply()
                 reply.log = self.log.tail(lines: request.lines ?? 200)
@@ -291,6 +326,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         r.switchedTo = state.switchedTo
         r.switchedAt = state.switchedAt
         r.xrayVersion = state.xrayVersion
+        r.searching = state.searching
+        r.latencyMs = state.latencyMs
+        r.latencyAt = state.latencyAt
         return r
     }
 }

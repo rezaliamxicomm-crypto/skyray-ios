@@ -35,11 +35,12 @@ final class Probe {
         return -1
     }
 
-    /// Auto's measurement of one line (AutoEngine): one window for the first request — no answer within it and the
-    /// line counts as failed, -1 — then the warm second down the kept-alive connection, the smaller time kept.
-    func measureLine() -> Int64 {
-        guard let first = head(Etha.probeURL) else { return -1 }
-        if let second = head(Etha.probeURL) { return min(first, second) }
+    /// Auto's measurement of one line (AutoEngine) against `url` (the box's probe target, else the fallback): one
+    /// window for the first request — no answer within it and the line counts as failed, -1 — then the warm second
+    /// down the kept-alive connection, the smaller time kept.
+    func measureLine(url: String = Etha.probeURL) -> Int64 {
+        guard let first = head(url) else { return -1 }
+        if let second = head(url) { return min(first, second) }
         return first
     }
 
@@ -55,7 +56,7 @@ final class Probe {
         var answered = false
         let started = Date()
         session.dataTask(with: request) { _, response, _ in
-            answered = (response as? HTTPURLResponse) != nil
+            answered = ((response as? HTTPURLResponse)?.statusCode ?? 600) < 400
             done.signal()
         }.resume()
         _ = done.wait(timeout: .now() + .seconds(timeoutSeconds + 3))

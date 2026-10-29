@@ -53,7 +53,7 @@ public final class SkyRayStore {
     public func updateTunnelState(_ change: (inout TunnelState) -> Void) { var s = tunnelState; change(&s); tunnelState = s }
 
     // MARK: small flags
-    private struct Flags: Codable { var deletedLink: String?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt? }
+    private struct Flags: Codable { var deletedLink: String?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt?; var fetchWays: [String: String]?; var linesFingerprint: String?; var linesChanged: Bool? }
     private var flags: Flags { get { read("flags.json", as: Flags.self) ?? Flags() } set { write(newValue, "flags.json") } }
     public var deletedLink: String? { get { flags.deletedLink } set { var f = flags; f.deletedLink = newValue; flags = f } }
     public var declarationAccepted: Bool { get { flags.declarationAccepted ?? false } set { var f = flags; f.declarationAccepted = newValue; flags = f } }
@@ -63,11 +63,18 @@ public final class SkyRayStore {
     /// The rating ask's counters (RatePrompt): the phone's, not the account's — "Delete account" leaves them.
     public var ratePrompt: RatePrompt { get { flags.rate ?? RatePrompt() } set { var f = flags; f.rate = newValue; flags = f } }
 
+    /// Which fetch way answered first on a network ("ech" / "tunnel" / "hop"), by its signature (SubscriptionImporter).
+    public func fetchWay(on network: String) -> String? { flags.fetchWays?[network] }
+    public func rememberFetchWay(_ way: String, on network: String) { var f = flags; var w = f.fetchWays ?? [:]; w[network] = way; f.fetchWays = w; flags = f }
+    /// The fingerprint of the stored lines (LineReport.fingerprint) and whether the last fetch changed it (the running tunnel must reload).
+    public var linesFingerprint: String? { get { flags.linesFingerprint } set { var f = flags; f.linesFingerprint = newValue; flags = f } }
+    public var linesChanged: Bool { get { flags.linesChanged ?? false } set { var f = flags; f.linesChanged = newValue; flags = f } }
+
     /// "Delete account": the subscription, the selection and the tunnel state go; the deleted link is
     /// remembered so the clipboard import never puts it straight back; the declaration stays accepted.
     public func wipe(rememberingDeletedLink link: String?) {
         remove("snapshot.json"); remove("selection.json"); remove("tunnel-state.json")
         for name in ["app.log", "tunnel.log", "xray.log"] { try? FileManager.default.removeItem(at: logsDir.appendingPathComponent(name)) }
-        var f = flags; f.deletedLink = link; f.lastRefreshAttempt = nil; flags = f
+        var f = flags; f.deletedLink = link; f.lastRefreshAttempt = nil; f.linesFingerprint = nil; f.linesChanged = nil; flags = f
     }
 }
