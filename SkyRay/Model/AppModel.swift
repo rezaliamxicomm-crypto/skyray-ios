@@ -90,7 +90,9 @@ final class AppModel: ObservableObject {
         case .idle: break
         }
         switch vpn.status {
-        case .connected: return L(searching ? "state.searching" : "state.connected")
+        // Connected, but the first measurement not in yet: the screen says "Connecting…" a few seconds longer (the
+        // operator's wording, 2026-10-30) rather than "Connected" over an empty chip — traffic already flows meanwhile.
+        case .connected: return L(searching ? "state.searching" : (latencyMs > 0 ? "state.connected" : "state.connecting"))
         case .connecting, .reasserting: return L("state.connecting")
         case .disconnecting: return L("state.disconnecting")
         default: return L("state.notconnected")
@@ -159,6 +161,7 @@ final class AppModel: ObservableObject {
             Task {
                 await self.pollStatus()
                 DevTools.mirrorLogs(from: self.store)
+                await self.pollUntilFirstLatency()
             }
         case .disconnected, .invalid:
             if phase == .connecting || phase == .disconnecting { phase = .idle }
@@ -166,6 +169,17 @@ final class AppModel: ObservableObject {
             searching = false; testing = false; latencyMs = 0; latencyAt = nil; outcomeKey = nil
         default:
             break
+        }
+    }
+
+    /// Right after the tunnel comes up the extension measures every line (one to five seconds): ask every two seconds
+    /// until the first time is in, up to 20 s, so the number follows the measurement within a second — the regular poll
+    /// is every ten.
+    private func pollUntilFirstLatency() async {
+        for _ in 0..<10 {
+            guard isConnected, latencyMs <= 0, !searching else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await pollStatus()
         }
     }
 
