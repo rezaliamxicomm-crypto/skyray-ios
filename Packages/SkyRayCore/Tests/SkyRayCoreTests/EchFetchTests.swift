@@ -61,7 +61,8 @@ final class EchFetchTests: XCTestCase {
         // the core reads these keys by name (echfetch.go's json tags): a renamed property would arrive empty
         let json = try XCTUnwrap(request.json())
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), ["url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs", "interface", "plain", "headers"])
+        XCTAssertEqual(Set(object.keys), ["url", "addresses", "pinnedAddresses", "resolvers", "lookupName", "pinnedKey", "userAgent", "timeoutMs", "interface", "plain", "headers", "signKeys"])
+        XCTAssertEqual(object["signKeys"] as? [String], Etha.signKeys)    // the box's two public keys: the core checks the answer's signature against them
         XCTAssertEqual(object["headers"] as? [String: String], [:])             // no report to carry: an empty map, the core ignores it
         XCTAssertEqual(object["plain"] as? Bool, false)                 // the ECH ways never ask for the plain one
         XCTAssertEqual(object["url"] as? String, "https://fra.skyrayconfig.org/sub/0123456789abcdef")
@@ -83,7 +84,7 @@ final class EchFetchTests: XCTestCase {
     }
 
     func testAGoodAnswerIsRead() throws {
-        let json = #"{"status":200,"headers":{"profile-update-interval":"3","subscription-userinfo":"upload=0; download=5; total=0; expire=0"},"body":"dmxlc3M6Ly9hYmM=","echAccepted":true,"address":"104.21.67.176","keySource":"dns:8.8.8.8","error":""}"#
+        let json = #"{"status":200,"headers":{"profile-update-interval":"3","subscription-userinfo":"upload=0; download=5; total=0; expire=0"},"body":"dmxlc3M6Ly9hYmM=","echAccepted":true,"signed":"ok","signedAt":1800000000,"address":"104.21.67.176","keySource":"dns:8.8.8.8","error":""}"#
         let result = try XCTUnwrap(EchFetchResult.parse(json))
         XCTAssertTrue(result.answered)
         XCTAssertEqual(result.status, 200)
@@ -91,6 +92,7 @@ final class EchFetchTests: XCTestCase {
         XCTAssertEqual(result.headers["profile-update-interval"], "3")
         XCTAssertEqual(result.address, "104.21.67.176")
         XCTAssertEqual(result.keySource, "dns:8.8.8.8")
+        XCTAssertEqual(result.signed, "ok"); XCTAssertEqual(result.signedAt, 1_800_000_000); XCTAssertTrue(result.trusted)
         var info = SubscriptionInfo()
         SubscriptionHeaders.apply(result.headers, to: &info)
         XCTAssertEqual(info.download, 5)
@@ -99,8 +101,8 @@ final class EchFetchTests: XCTestCase {
     }
 
     func testOnlyAFetchThatReachedNobodyIsWorthAnotherWay() throws {
-        // the server answered — expired or unknown: another way out would hear the same
-        XCTAssertTrue(try XCTUnwrap(EchFetchResult.parse(#"{"status":403,"headers":{},"body":"{\"detail\":\"expired\"}","echAccepted":true,"address":"a","keySource":"retry","error":""}"#)).answered)
+        // the server answered — expired or unknown: another way out would hear the same (an expiry carries the box's signature, 2.1)
+        XCTAssertTrue(try XCTUnwrap(EchFetchResult.parse(#"{"status":403,"headers":{},"body":"{\"detail\":\"expired\"}","echAccepted":true,"address":"a","keySource":"retry","signed":"ok","signedAt":1800000000,"error":""}"#)).answered)
         XCTAssertTrue(try XCTUnwrap(EchFetchResult.parse(#"{"status":404,"echAccepted":true}"#)).answered)
         // nobody answered
         let failed = try XCTUnwrap(EchFetchResult.parse(#"{"status":0,"headers":{},"body":"","echAccepted":false,"address":"","keySource":"","error":"ech: dial tcp 104.21.67.176:443: i/o timeout"}"#))
@@ -136,10 +138,31 @@ final class EchFetchTests: XCTestCase {
     }
 
     func testPlainAnsweredIsAnyStatusWithoutError() {
-        var r = EchFetchResult(); r.status = 403; r.keySource = "plain"
+        var r = EchFetchResult(); r.status = 403; r.keySource = "plain"; r.signed = "ok"; r.signedAt = 1_800_000_000
         XCTAssertTrue(r.plainAnswered); XCTAssertFalse(r.answered); XCTAssertEqual(r.failure, "status 403")
         r.error = "plain: dial"; XCTAssertFalse(r.plainAnswered)
         var e = EchFetchResult(); e.status = 0; XCTAssertFalse(e.plainAnswered)
+        var u = EchFetchResult(); u.status = 404; u.keySource = "plain"; XCTAssertTrue(u.plainAnswered)   // other statuses carry no signature
+    }
+
+    /// The box's own word (2.1): a subscription (200) or an expiry (403) counts only with the box's signature, on every way.
+    func testASubscriptionOrAnExpiryCountsOnlyWithTheBoxsSignature() {
+        XCTAssertEqual(Etha.signKeys.count, 2)                                                    // A in use, B the spare
+        var ok = EchFetchResult(); ok.status = 200; ok.body = "dmxlc3M6Ly8="; ok.echAccepted = true; ok.signed = "ok"; ok.signedAt = 1_800_000_000
+        XCTAssertTrue(ok.trusted); XCTAssertTrue(ok.answered)
+        for verdict in ["", "none", "bad", "unknown-key", "nokeys"] {
+            var r = ok; r.signed = verdict
+            XCTAssertFalse(r.trusted, verdict); XCTAssertFalse(r.answered, verdict)
+            XCTAssertEqual(r.failure, "status 200, signature \(verdict.isEmpty ? "unchecked (old core)" : verdict)")
+            var hop = r; hop.echAccepted = false; hop.keySource = "plain"
+            XCTAssertFalse(hop.plainAnswered, verdict)                                            // the hop's answer is checked the same way
+        }
+        var expired = EchFetchResult(); expired.status = 403; expired.echAccepted = true; expired.signed = "bad"
+        XCTAssertFalse(expired.answered)                                                          // a forged expiry is no answer
+        var other = EchFetchResult(); other.status = 500; other.echAccepted = true; other.signed = "none"
+        XCTAssertTrue(other.answered)
+        XCTAssertFalse(ok.stale(now: 1_800_000_000 + 3600)); XCTAssertTrue(ok.stale(now: 1_800_000_000 + 3601))
+        var unsigned404 = EchFetchResult(); unsigned404.status = 404; XCTAssertFalse(unsigned404.stale(now: 2_000_000_000))
     }
 
     func testTheReportTravelsAsAHeaderOnEveryWayAndTheHopWaitsForEch() throws {

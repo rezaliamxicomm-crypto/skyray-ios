@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds LibXray.xcframework from XTLS/libXray at the tag pinned in Vendor/libxray-source.lock, with the
-# subscription fetch with Encrypted Client Hello compiled into its C bridge: echfetch/echfetch.go and
-# echfetch/echfetch_darwin.go as package main, and libxray/*.go: echfetch_export.go (CGoFetchSubscriptionEch) and
+# subscription fetch with Encrypted Client Hello compiled into its C bridge: echfetch/echfetch.go,
+# echfetch/echfetch_darwin.go and echfetch/signature.go (the signed answer) as package main, and libxray/*.go: echfetch_export.go (CGoFetchSubscriptionEch) and
 # autoctl_export.go (CGoBalancerOverride, Auto's balancer override through the API inbound).
 # The build itself is upstream's own recipe (python3 build/main.py apple go), every slice it makes.
 # Needs a Mac with Xcode, Go and Python 3. Output: build/libxray-apple-cgo.zip, laid out like upstream's
@@ -14,7 +14,7 @@ rm -rf "$SRC" build/libxray-apple-cgo build/libxray-apple-cgo.zip
 mkdir -p build
 git clone -q --depth 1 -b "$TAG" https://github.com/XTLS/libXray "$SRC"
 [ "$(git -C "$SRC" rev-parse HEAD)" = "$COMMIT" ] || { echo "libXray $TAG is not commit $COMMIT any more"; exit 1; }
-for f in echfetch.go echfetch_darwin.go; do
+for f in echfetch.go echfetch_darwin.go signature.go; do
   sed 's/^package libv2ray$/package main/' "echfetch/$f" > "$SRC/cgo_bridge/$f"
   grep -q '^package main$' "$SRC/cgo_bridge/$f" || { echo "$f: no package clause to rewrite"; exit 1; }
 done
