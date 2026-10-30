@@ -88,8 +88,10 @@ struct SubscriptionImporter {
             let (way, result) = winner
             AppLog.info("fetch: \(way.name) answered first via \(result.address) (key: \(result.keySource)), status \(result.status), signed \(result.signed.isEmpty ? "-" : result.signed)\(result.stale() ? " (stale, nothing fresher came)" : ""); network \(network)")
             store.rememberFetchWay(way.kind, on: network)
-            if result.signedAt > 0 { store.lastSignedAt = max(store.lastSignedAt ?? 0, result.signedAt) }
-            if !report.isEmpty { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
+            if result.signedAt > 0 { store.lastSignedAt = max(store.lastSignedAt ?? 0, result.heldSignedAt()) }
+            // the report is spent only when the box could file it under this phone's network: a fetch that won through the
+            // tunnel reaches the box from its own address and is filed as "through the tunnel" (the box ignores it for the ranking)
+            if !report.isEmpty, way.kind != "tunnel" { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
             return try Self.read(status: result.status, headers: result.headers, body: Data(result.body.utf8))
         }
         // Nobody answered on any of those ways: the last resort, the link fetched by name without ECH as every version
@@ -107,8 +109,12 @@ struct SubscriptionImporter {
             AppLog.warn("fetch: by name without ECH: signed before the one held (\(plain.signedAt) < \(held)): not taken")
             throw FetchError.network
         }
+        if plain.tooOld() {
+            AppLog.warn("fetch: by name without ECH: signed \(Int64(Date().timeIntervalSince1970) - plain.signedAt) s ago: refused")
+            throw FetchError.network
+        }
         AppLog.info("fetch: by name without ECH via \(plain.address), status \(plain.status), signed \(plain.signed.isEmpty ? "-" : plain.signed)")
-        if plain.signedAt > 0 { store.lastSignedAt = max(store.lastSignedAt ?? 0, plain.signedAt) }
+        if plain.signedAt > 0 { store.lastSignedAt = max(store.lastSignedAt ?? 0, plain.heldSignedAt()) }
         if !report.isEmpty { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
         return try Self.read(status: plain.status, headers: plain.headers, body: Data(plain.body.utf8))
     }
@@ -131,10 +137,12 @@ struct SubscriptionImporter {
 
     /// Every way started at its time; the first whose server answered wins, the others run out on their own (the
     /// core's call cannot be cut short) and their answers are dropped. nil when nobody answered.
-    /// The first way whose answer is the box's own wins. The replay rules (2.1): an answer signed before the one this
-    /// phone already holds is never taken (a hop serving last week's answer); one signed longer ago than
-    /// Etha.signedStaleAfter is kept aside and taken only when no fresher answer comes from any way.
-    static func race(_ ways: [Way], heldSignedAt: Int64?) async -> (Way, EchFetchResult)? {
+    /// The first way whose answer is the box's own word — a signed 200 or 403 — wins and cancels the rest. Any other status
+    /// (a 404, a 5xx: nothing signed) is kept aside and used only when no way brings a signed answer, so a hop answering
+    /// 404 fast cannot end the race. The replay rules (2.1): an answer signed before the one this phone already holds is
+    /// never taken; one older than Etha.signedMaxAge is never taken; one older than Etha.signedStaleAfter is kept aside
+    /// and the freshest of those taken only when nothing fresher comes.
+    static func race(_ ways: [Way], heldSignedAt: Int64?, now: Int64 = Int64(Date().timeIntervalSince1970)) async -> (Way, EchFetchResult)? {
         await withTaskGroup(of: (Way, EchFetchResult?).self) { group in
             for way in ways {
                 group.addTask {
@@ -145,24 +153,35 @@ struct SubscriptionImporter {
             }
             var winner: (Way, EchFetchResult)?
             var staleWinner: (Way, EchFetchResult)?
+            var otherStatus: (Way, EchFetchResult)?
             for await (way, result) in group {
-                if let r = result, way.answered(r) {
-                    if let held = heldSignedAt, r.signedAt > 0, r.signedAt < held {
-                        AppLog.warn("fetch: \(way.name) answered with a subscription signed before the one held (\(r.signedAt) < \(held)): not taken")
-                        continue
-                    }
-                    if r.stale() {
-                        if staleWinner == nil { staleWinner = (way, r) }
-                        AppLog.warn("fetch: \(way.name) answered with a subscription signed \(Int64(Date().timeIntervalSince1970) - r.signedAt) s ago: kept aside")
-                        continue
-                    }
-                    winner = (way, r)
-                    group.cancelAll()
-                    break
+                guard let r = result, way.answered(r) else {
+                    AppLog.warn("fetch: \(way.name) gave nothing: \(result?.failure ?? "no result from the core")")
+                    continue
                 }
-                AppLog.warn("fetch: \(way.name) gave nothing: \(result?.failure ?? "no result from the core")")
+                if !r.signedWord {
+                    if otherStatus == nil { otherStatus = (way, r) }
+                    AppLog.warn("fetch: \(way.name) answered \(r.status) without the box's word: kept aside")
+                    continue
+                }
+                if let held = heldSignedAt, r.signedAt > 0, r.signedAt < held {
+                    AppLog.warn("fetch: \(way.name) answered with a subscription signed before the one held (\(r.signedAt) < \(held)): not taken")
+                    continue
+                }
+                if r.tooOld(now: now) {
+                    AppLog.warn("fetch: \(way.name) answered with a subscription signed \(now - r.signedAt) s ago: refused")
+                    continue
+                }
+                if r.stale(now: now) {
+                    if staleWinner == nil || r.signedAt > staleWinner!.1.signedAt { staleWinner = (way, r) }
+                    AppLog.warn("fetch: \(way.name) answered with a subscription signed \(now - r.signedAt) s ago: kept aside")
+                    continue
+                }
+                winner = (way, r)
+                group.cancelAll()
+                break
             }
-            return winner ?? staleWinner
+            return winner ?? staleWinner ?? otherStatus
         }
     }
 

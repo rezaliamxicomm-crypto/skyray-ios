@@ -11,23 +11,28 @@ import SkyRayXray
 ///
 ///   - no bursts: after Connect the line in use is probed first (its number on the chip within a second), then the
 ///     first pass — every other line, two at a time, a step a second, best-known first (this network's memory, else the
-///     box's hint, else the subscription's order); then the steady trickle, one probe per roundSec/N, give or take the
-///     jitter, only while the radio is warm (bytes moved within warmSec) or the app is on screen (status requests);
-///     the line in use every currentSec while on screen; a pass ended is a decision and a report;
+///     box's hint, else the subscription's order); then the steady trickle, one probe per roundSec/N over the lines that
+///     can be probed (the line in use among them), give or take the jitter, only while the radio is warm (bytes moved
+///     within warmSec) or the app is on screen (status requests); the line in use also every currentSec while on screen;
+///     a pass ended — by its last probe or by a tail of lines waiting their retry — is a decision and a report;
 ///   - moves (AutoDecision): the first pass corrects a cold pick once, for a line clearly better; steady state moves only
 ///     for a lead that persists over two pass ends (or is twice the margin), never within the dwell; a manual test by
 ///     the margin alone. A change of line moves new connections only and cuts nothing that is open;
-///   - failover, make-before-break: a stall (bytes out, none back for stallSec) or a failed probe of the line in use
-///     probes the line in use and the best-known alternative together within failoverMs; the line in use answering
-///     means nothing happens; it failing and the alternative answering moves at once; the alternative failing too tries
-///     the next best once; then Searching. The app is asked for one quiet fetch after a failover (TunnelState.failoverAt);
+///   - failover, make-before-break: a stall (bytes out, none back for stallSec) or a failed full-window probe of the
+///     line in use probes it and the best-known alternative together within failoverMs; the line in use answering
+///     means nothing happens (and the alarm rests for a minute); it failing and the alternative answering moves at
+///     once — only then is the old line held as failed; the alternative failing too tries the next, once; then
+///     Searching. The short window condemns nobody by itself. The app is asked for one quiet fetch after a failover;
 ///   - a failed line backs off (15 → 30 → 60 → 120 min) and the memory of the network is kept across sessions
-///     (SkyRayStore.lineHealth); a network change forgives every line and restarts the first pass in 15 s; idle, nothing
-///     runs, and traffic returning probes the line in use at once;
-///   - Searching (no line answers): the fast trickle over every line, retries ignored, until one answers; the app, seeing
-///     the state, fetches the subscription again; the hint's outage flag changes the text ("it is not you");
+///     (SkyRayStore.lineHealth); a network change loads the new network's memory intact (leaving a dead line for its
+///     known-good one at once) and restarts the first pass in 15 s; the same network coming back forgives every line;
+///     idle, nothing runs; traffic returning probes the line in use once;
+///   - Searching (nothing answers: every line failed or waits its retry, the line in use among the failed): every line
+///     in turn, two at a time, each once per searchSec, three times slower when the box says the network blocks
+///     everything, only warm or on screen after ten minutes; no failure is held against a line meanwhile, and leaving
+///     forgives them all; the app, seeing the state, fetches the subscription again;
 ///   - the box's probe target, the fallback only while the target answers nobody (one probe of the line in use against
-///     the fallback decides, the first probe of every pass is a scout back);
+///     the fallback decides before Searching; every tenth probe while on the fallback is a scout back);
 ///   - what is measured goes to the App Group as it lands (the chip), every pass as the report the next fetch carries to
 ///     the box (TunnelState.lineReport, the header X-Etha-Lines) with the best five-second download rate seen on the
 ///     line in use during the pass — the passive throughput figure the box's ranking folds in.
@@ -52,6 +57,7 @@ final class AutoEngine {
     private let traffic: () -> (up: Int64, down: Int64)
     private let onSwitch: (Line, String) -> Void
     private let measureQueue = DispatchQueue(label: "com.allion.skyray.tunnel.measure", attributes: .concurrent)
+    private let idOf: [String: String]            // label → id
 
     private(set) var current: String
     private var results: [String: Int64] = [:]
@@ -65,26 +71,29 @@ final class AutoEngine {
     private var passRateKbps: Int64 = 0
     private var lastTrafficAt: Double
     private var wasInUse = true
-    private var lastStallProbeAt: Double = -1_000
+    private var stallQuietUntil: Double = 0
     private var watchedAt: Double = -1_000
     private var timer: DispatchSourceTimer?
+    private var timerSuspended = false
     private var measuring = false
     private var paused = false
     private var stopped = false
     private(set) var searching = false
     private var movedInPass = false
+    private var movedWhileSearching = false
     private var probedSinceReport = Set<String>()
+    private var probesThisPass = 0
     private var searchSteps = 0
 
     private static let tick: TimeInterval = 1
     private static let samplesKept = 32
     private static let stallProbeGap: Double = 10
+    private static let stallFalseAlarmRest: Double = 60
     private static let networkSettle: Double = 15
     private static let watchedFor: Double = 15
     private static let rateWindow: Double = 5
     private static let rateMinBytes: Int64 = 256 * 1024
-    /// a manual test measures every line at once, within what the extension's memory allows
-    private static let manualConcurrency = 16
+    private static let firstPassTimeoutSec = 3
 
     init(queue: DispatchQueue, store: SkyRayStore, log: RingLog, lines: [Line], policy: AutoPolicy, apiPort: Int, current: String,
          network: String, hint: Hint?, traffic: @escaping () -> (up: Int64, down: Int64), onSwitch: @escaping (Line, String) -> Void) {
@@ -93,6 +102,9 @@ final class AutoEngine {
         self.network = network; self.hint = hint
         self.health = store.lineHealth(on: network)
         self.lastTrafficAt = AutoEngine.mono()
+        var map: [String: String] = [:]
+        for l in lines where map[l.label] == nil { map[l.label] = l.id }
+        self.idOf = map
     }
 
     static func mono() -> Double { ProcessInfo.processInfo.systemUptime }
@@ -102,17 +114,20 @@ final class AutoEngine {
 
     func start() {
         let labels = lines.map { $0.label }
-        // the start line: the best this network is known to have, else the hint's first, else what the provider chose
-        if health.lastMs(label(current)) == nil {
-            let best = health.bestKnown(labels) ?? hint?.arrange(labels).first { !(hint?.dead.contains($0) ?? false) }
-            if let b = best, let line = lines.first(where: { $0.label == b }), line.id != current {
-                switchTo(id: line.id, reason: health.bestKnown(labels) != nil ? "known best on \(network)" : "the box's advice")
+        // the start line: the best this network is known to have when the provider's choice is unknown here or held as
+        // failed, else the hint's first, else the provider's choice
+        let mine = label(current)
+        if health.lastMs(mine) == nil || health.isDead(mine) {
+            let known = health.bestKnown(labels)
+            let best = known ?? hint?.arrange(labels).first { !health.isDead($0) && !(hint?.dead.contains($0) ?? false) }
+            if let b = best, let id = idOf[b], id != current {
+                switchTo(id: id, reason: known != nil ? "known best on \(network)" : "the box's advice")
             }
         }
         schedule.start(now: AutoEngine.mono(), order: order())
         log.info("auto: \(lines.count) lines behind the balancer, on \(name(current)); network \(network), \(health.entries.count) lines remembered\(hint.map { ", the box advises \($0.order.count) (\($0.dead.count) dead\($0.outage ? ", outage" : ""))" } ?? ""); a pass every \(policy.roundSec) s, the first at \(policy.firstPaceSec) s a step")
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + AutoEngine.tick, repeating: AutoEngine.tick)
+        t.schedule(deadline: .now() + AutoEngine.tick, repeating: AutoEngine.tick, leeway: .milliseconds(200))
         t.setEventHandler { [weak self] in self?.tickNow() }
         t.resume()
         timer = t
@@ -120,26 +135,41 @@ final class AutoEngine {
 
     func stop() {
         stopped = true
+        if timerSuspended { timer?.resume(); timerSuspended = false }   // a suspended source must not be cancelled
         timer?.cancel(); timer = nil
         store.saveLineHealth(health, on: network)
     }
 
-    func pause() { paused = true }
+    /// The device sleeps: the clock stops with it (no 1 Hz wake-ups); traffic cannot flow meanwhile either.
+    func pause() {
+        paused = true
+        if !timerSuspended, let t = timer { t.suspend(); timerSuspended = true }
+    }
 
-    func resume() { paused = false; samples.removeAll(); rateSamples.removeAll() }
+    func resume() {
+        paused = false
+        samples.removeAll(); rateSamples.removeAll()
+        if timerSuspended, let t = timer { t.resume(); timerSuspended = false }
+    }
 
     /// The app asked for the status: its chip is on screen, the line in use is kept fresh for it.
     func noteWatched() { watchedAt = AutoEngine.mono() }
 
-    /// Wi-Fi ↔ mobile (or the path back after a gap): what was measured no longer holds. The memory of the new network
-    /// takes over, every line is forgiven, the first pass restarts in 15 s; a second event within a minute is the same.
+    /// Wi-Fi ↔ mobile (or the path back after a gap): what was measured no longer holds. Another network's memory takes
+    /// over intact — a line it holds as failed is left for its known-good one at once —; the same network coming back
+    /// forgives every line. The first pass restarts in 15 s; a second event within a minute is the same.
     func onNetworkChanged(signature: String) {
         if signature != network {
             store.saveLineHealth(health, on: network)
             network = signature
             health = store.lineHealth(on: network)
+            let labels = lines.map { $0.label }
+            if health.isDead(label(current)), let best = health.bestKnown(labels), let id = idOf[best], id != current {
+                switchTo(id: id, reason: "known good on \(network), \(name(current)) is not")
+            }
+        } else {
+            health.forgive()
         }
-        health.forgive()
         samples.removeAll(); rateSamples.removeAll()
         decision.firstSwitchDone = false
         let now = AutoEngine.mono()
@@ -147,6 +177,7 @@ final class AutoEngine {
         schedule.networkChanged(now: now, settle: AutoEngine.networkSettle)
         if schedule.lastNetworkAt != before {
             schedule.order = order()
+            probesThisPass = 0
             log.info("auto: the network changed (\(network)); the first pass runs again from \(Int(AutoEngine.networkSettle)) s on")
         }
     }
@@ -159,14 +190,15 @@ final class AutoEngine {
             return
         }
         measuring = true
-        measureSet(lines, concurrency: min(lines.count, AutoEngine.manualConcurrency), timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+        measureSet(lines, concurrency: min(lines.count, max(1, policy.concurrency)), timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
             guard let self = self else { completion("none"); return }
+            self.measuring = false
             let moved = self.decide(.manual, reason: "manual")
             self.report(trigger: "manual", switched: moved)
             self.updateSearching()
             if !self.searching { self.schedule.reseed(now: AutoEngine.mono(), order: self.order(), policy: self.policy, draw: Double.random(in: 0..<1)) }
             self.movedInPass = false
-            self.measuring = false
+            self.probesThisPass = 0
             self.store.saveLineHealth(self.health, on: self.network)
             let answered = self.lines.contains { (self.results[$0.id] ?? 0) > 0 }
             completion(!answered ? "none" : (moved ? "switched" : "kept"))
@@ -180,31 +212,38 @@ final class AutoEngine {
         let now = AutoEngine.mono()
         sample(now)
         guard !measuring else { return }
-        if !searching, policy.stalled(samples, now: Date()), now - lastStallProbeAt >= AutoEngine.stallProbeGap {
-            lastStallProbeAt = now
+        if !searching, now >= stallQuietUntil, policy.stalled(samples, now: Date()) {
+            stallQuietUntil = now + AutoEngine.stallProbeGap
             log.warn("auto: bytes out and none back for \(policy.stallSec) s on \(name(current))")
             failover(reason: "stall")
             return
         }
         let warm = now - lastTrafficAt < Double(policy.warmSec)
         let inUse = now - lastTrafficAt < Double(policy.idleSec)
-        if inUse, !wasInUse { schedule.wake(now: now); log.info("auto: traffic is back after the idle gap; measuring now") }
+        if inUse, !wasInUse { schedule.wake(now: now); log.info("auto: traffic is back after the idle gap; the line in use is probed") }
         wasInUse = inUse
         let watched = now - watchedAt < AutoEngine.watchedFor
         let wall = AutoEngine.wall()
-        let action = schedule.action(now: now, warm: warm, watched: watched, searching: searching, current: current,
-                                     due: { id in self.health.due(self.label(id), now: wall) })
+        let due: (String) -> Bool = { id in self.health.due(self.label(id), now: wall) }
+        let action = schedule.action(now: now, warm: warm, watched: watched, searching: searching, current: current, due: due)
         switch action {
         case .probe(let ids)?:
             searching ? searchStep(ids) : probeLines(ids)
         case .probeCurrent?:
             probeCurrentLine()
         case nil:
-            // a step whose time has come with nothing to probe (every other line waits its retry): spent
+            // a step whose time has come with nothing left to probe before the rotation's end: the pass ends here
             if !searching, let n = schedule.nextProbeAt, now >= n, warm || watched || schedule.forced || schedule.phase == .first {
-                schedule.nothingDue(now: now, policy: policy, draw: Double.random(in: 0..<1))
+                let first = schedule.phase == .first
+                if probesThisPass > 0 { passEnded(first: first) }
+                schedule.nothingDue(now: now, policy: policy, draw: Double.random(in: 0..<1), active: activeCount(due))
             }
         }
+    }
+
+    /// How many lines the rotation can probe right now (the pace spreads the round over them).
+    private func activeCount(_ due: (String) -> Bool) -> Int {
+        lines.filter { due($0.id) && ($0.id != current || schedule.phase != .first) }.count
     }
 
     /// The counters every tick: traffic (the idle and warm clocks, the stall detector) and the download rate window.
@@ -234,23 +273,26 @@ final class AutoEngine {
         let good = health.bestFirst(labels).filter { health.lastMs($0) != nil && !health.isDead($0) }
         let unseen = labels.filter { health.lastMs($0) == nil && !health.isDead($0) }
         let dead = labels.filter { health.isDead($0) }
-        let arranged = good + (hint?.arrange(unseen) ?? unseen) + dead
-        return arranged.compactMap { l in lines.first { $0.label == l }?.id }
+        return (good + (hint?.arrange(unseen) ?? unseen) + dead).compactMap { idOf[$0] }
     }
 
     private func label(_ id: String) -> String { lines.first { $0.id == id }?.label ?? id }
     private func name(_ id: String) -> String { lines.first { $0.id == id }?.remark ?? id }
     private func line(_ id: String) -> Line? { lines.first { $0.id == id } }
+    private func resultOf(label: String) -> Int64 { idOf[label].flatMap { results[$0] } ?? 0 }
 
     /// One step of the trickle (one line; two in the first pass): measured, recorded; the first pass may correct the
-    /// start once; a wrapped rotation is a pass — the steady decision and the report.
+    /// start once; a wrapped rotation is a pass — the steady decision and the report. The line in use failing its
+    /// full-window probe here is a failover.
     private func probeLines(_ ids: [String]) {
         let which = ids.compactMap { line($0) }
         guard !which.isEmpty else { return }
+        let first = schedule.phase == .first
         let scout = schedule.fallback && schedule.cursor == 0   // the first probe of a pass on the fallback tries the target
         let url = schedule.fallback && !scout ? Etha.probeFallbackURL : Etha.probeURL
+        let timeout = (first ? min(policy.probeTimeoutSec, AutoEngine.firstPassTimeoutSec) : policy.probeTimeoutSec) * 1000
         measuring = true
-        measureOnce(which, concurrency: which.count, url: url, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+        measureOnce(which, concurrency: which.count, url: url, timeoutMs: timeout) { [weak self] out in
             guard let self = self else { return }
             if scout {
                 let back = out.values.contains { $0 > 0 }
@@ -258,24 +300,36 @@ final class AutoEngine {
                 if back { self.log.info("auto: the probe target answers again; measuring against it") }
             }
             self.record(out, which: which)
+            self.probesThisPass += which.count
             let now = AutoEngine.mono()
-            let first = self.schedule.phase == .first
-            let passEnd = self.schedule.probed(now: now, ids: which.map { $0.id }, policy: self.policy, draw: Double.random(in: 0..<1))
+            let wall = AutoEngine.wall()
+            let due: (String) -> Bool = { id in self.health.due(self.label(id), now: wall) }
+            let passEnd = self.schedule.probed(now: now, ids: which.map { $0.id }, policy: self.policy, draw: Double.random(in: 0..<1), active: self.activeCount(due))
+            self.measuring = false
             if first, self.decide(.first, reason: "first pass") { self.movedInPass = true }
-            if passEnd {
-                if !first, self.decide(.passEnd, reason: "pass end") { self.movedInPass = true }
-                self.report(trigger: first ? "first" : "auto", switched: self.movedInPass)
-                self.movedInPass = false
-                self.passRateKbps = 0
-                self.store.saveLineHealth(self.health, on: self.network)
+            if passEnd { self.passEnded(first: first) }
+            if which.contains(where: { $0.id == self.current }), (out[self.current] ?? -1) < 0 {
+                self.log.warn("auto: \(self.name(self.current)) did not answer its probe")
+                self.failover(reason: "probe")
+                return
             }
             self.updateSearching()
-            self.measuring = false
         }
     }
 
-    /// The line in use's own probe (every currentSec while the app is on screen, and when traffic returns): its number
-    /// to the chip; failed, the failover.
+    /// A pass is over, by its last probe or by a tail of lines waiting their retry: the steady decision, the report, the
+    /// rate window, the memory saved.
+    private func passEnded(first: Bool) {
+        if !first, decide(.passEnd, reason: "pass end") { movedInPass = true }
+        report(trigger: first ? "first" : "auto", switched: movedInPass)
+        movedInPass = false
+        passRateKbps = 0
+        probesThisPass = 0
+        store.saveLineHealth(health, on: network)
+    }
+
+    /// The line in use's own probe (every currentSec while the app is on screen, and once when traffic returns): its
+    /// number to the chip; a full-window failure, the failover.
     private func probeCurrentLine() {
         guard let l = line(current) else { return }
         measuring = true
@@ -291,28 +345,33 @@ final class AutoEngine {
         }
     }
 
-    /// Make-before-break: the line in use and the best-known alternative probed together within failoverMs. The line in
-    /// use answering: nothing moves (a false alarm costs this one probe). It failing and the alternative answering: new
-    /// connections move at once. The alternative failing too: the next best, once more; nothing: Searching decides.
-    private func failover(reason: String, attempt: Int = 1) {
+    /// Make-before-break: the line in use and the best alternative not yet tried probed together within failoverMs. The
+    /// line in use answering: nothing moves, the alarm rests a minute. It failing and the alternative answering: new
+    /// connections move at once, and only then is the old line held as failed. The alternative failing too: the next,
+    /// once more; nothing answering: Searching. The short window itself condemns nobody — answers are kept, failures not.
+    private func failover(reason: String, tried: Set<String> = [], attempt: Int = 1) {
         guard let cur = line(current), !measuring else { return }
         let labels = lines.map { $0.label }
-        let altLabel = health.bestKnown(labels, except: label(current))
-            ?? hint?.arrange(labels).first { $0 != label(current) && !(hint?.dead.contains($0) ?? false) }
-            ?? labels.first { $0 != label(current) }
-        let alt = altLabel.flatMap { l in lines.first { $0.label == l } }
+        let mine = label(current)
+        let excluded = tried.union([mine])
+        let altLabel = health.bestKnown(labels, except: mine).flatMap { excluded.contains($0) ? nil : $0 }
+            ?? (hint?.arrange(labels) ?? labels).first { !excluded.contains($0) && !health.isDead($0) && !(hint?.dead.contains($0) ?? false) }
+            ?? (hint?.arrange(labels) ?? labels).first { !excluded.contains($0) }
+        let alt = altLabel.flatMap { idOf[$0] }.flatMap { line($0) }
         var which = [cur]
         if let a = alt { which.append(a) }
         measuring = true
         measureOnce(which, concurrency: which.count, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.failoverMs) { [weak self] out in
             guard let self = self else { return }
-            self.record(out, which: which)
+            self.record(out, which: which, condemn: false)      // a 1.5-s window: answers count, failures do not
             self.measuring = false
             if (out[cur.id] ?? -1) > 0 {
+                self.stallQuietUntil = AutoEngine.mono() + AutoEngine.stallFalseAlarmRest
                 self.log.info("auto: \(cur.remark) answers within \(self.policy.failoverMs) ms (\(reason)): staying")
                 return
             }
             if let a = alt, (out[a.id] ?? -1) > 0 {
+                self.condemn(cur.id)
                 self.switchTo(id: a.id, reason: "failover after \(reason)")
                 self.decision.moved(now: AutoEngine.mono())
                 self.report(trigger: "failover", switched: true)
@@ -320,29 +379,49 @@ final class AutoEngine {
                 self.store.saveLineHealth(self.health, on: self.network)
                 return
             }
+            var next = tried
+            if let a = alt { next.insert(a.label) }
             if attempt < 2, alt != nil {
-                self.failover(reason: reason, attempt: attempt + 1)
+                self.failover(reason: reason, tried: next, attempt: attempt + 1)
                 return
             }
-            self.updateSearching()
+            // nothing answered the line in use nor two alternatives: the line in use is held as failed and Searching decides
+            self.condemn(cur.id)
+            self.updateSearching(force: true)
         }
     }
 
-    /// Searching: a step of the fast trickle (two lines, a second a step, every line in turn). The first to answer takes
-    /// new connections; leaving the state re-seeds the trickle.
+    /// The line failed for good within this session: its result and its memory say so (its retry backs off).
+    private func condemn(_ id: String) {
+        results[id] = -1
+        health.failed(label(id), now: AutoEngine.wall(), policy: policy)
+        probedSinceReport.insert(id)
+        if id == current { tellLatency() }
+    }
+
+    /// Searching: a step over every line in turn (two lines). The first to answer takes new connections; leaving the
+    /// state re-seeds the trickle and forgives every line. Every tenth step on the fallback scouts the box's target.
     private func searchStep(_ ids: [String]) {
         let which = ids.compactMap { line($0) }
         guard !which.isEmpty else { return }
+        searchSteps += 1
+        let scout = schedule.fallback && searchSteps % 10 == 0
+        let url = schedule.fallback && !scout ? Etha.probeFallbackURL : Etha.probeURL
         measuring = true
-        measureOnce(which, concurrency: which.count, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+        measureOnce(which, concurrency: which.count, url: url, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
             guard let self = self else { return }
-            self.record(out, which: which)
-            self.schedule.searchStep(now: AutoEngine.mono(), count: which.count)
-            self.searchSteps += 1
+            if scout {
+                let back = out.values.contains { $0 > 0 }
+                self.schedule.fallback = AutoSchedule.nextFallback(current: true, targetAnswered: back, fallbackAnswered: false)
+                if back { self.log.info("auto: the probe target answers again; measuring against it") }
+            }
+            self.record(out, which: which, condemn: false)      // while searching no failure is held against a line
+            self.schedule.searchStep(now: AutoEngine.mono(), count: which.count, policy: self.policy, slow: self.hint?.outage ?? false)
             if self.searchSteps % 30 == 0 { self.refreshHint() }
             if let found = which.first(where: { (out[$0.id] ?? -1) > 0 }), found.id != self.current {
                 self.switchTo(id: found.id, reason: "a line answers again")
                 self.decision.moved(now: AutoEngine.mono())
+                self.movedWhileSearching = true
             }
             self.measuring = false
             self.updateSearching()
@@ -407,12 +486,20 @@ final class AutoEngine {
     }
 
     /// Results into the engine, the memory of the network and the App Group; the line in use's number to the chip.
-    private func record(_ out: [String: Int64], which: [Line]) {
+    /// `condemn`: whether a failure is held against the line (not from a short failover window, not while searching).
+    private func record(_ out: [String: Int64], which: [Line], condemn: Bool = true) {
         let wall = AutoEngine.wall()
         for (id, ms) in out {
-            results[id] = ms
+            if ms > 0 {
+                results[id] = ms
+                health.ok(label(id), ms: ms, now: wall)
+            } else if condemn {
+                results[id] = ms
+                health.failed(label(id), now: wall, policy: policy)
+            } else {
+                continue
+            }
             probedSinceReport.insert(id)
-            if ms > 0 { health.ok(label(id), ms: ms, now: wall) } else { health.failed(label(id), now: wall, policy: policy) }
         }
         let snapshot = results
         store.updateTunnelState { $0.results = snapshot; $0.lastRoundAt = Date() }
@@ -468,31 +555,6 @@ final class AutoEngine {
         if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll() }
     }
 
-    /// Searching = every line measured and none answering. Before entering it the line in use is probed against the
-    /// fallback once: an answer there means the target is down, not the lines, and the probes move to the fallback.
-    /// Entering turns the clock to the fast trickle; leaving re-seeds it and reports.
-    private func updateSearching() {
-        let dead = !lines.isEmpty && lines.allSatisfy { (results[$0.id] ?? 0) < 0 }
-        if dead, !searching, !schedule.fallback, !measuring, let cur = line(current) {
-            measuring = true
-            measureOnce([cur], concurrency: 1, url: Etha.probeFallbackURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
-                guard let self = self else { return }
-                self.measuring = false
-                if (out[cur.id] ?? -1) > 0 {
-                    self.schedule.fallback = true
-                    self.results[cur.id] = out[cur.id]
-                    self.health.ok(self.label(cur.id), ms: out[cur.id]!, now: AutoEngine.wall())
-                    self.tellLatency()
-                    self.log.warn("auto: the probe target gave no answer on any line but the fallback answers on \(cur.remark): measuring against the fallback until the target answers again")
-                } else {
-                    self.enterSearching(true)
-                }
-            }
-            return
-        }
-        if dead != searching { enterSearching(dead) }
-    }
-
     /// The box's latest advice (the app's refetch while searching brings a fresh hint): the outage flag follows it.
     private func refreshHint() {
         guard let fresh = Hint.parse(store.loadSnapshot()?.info.hint) else { return }
@@ -505,6 +567,34 @@ final class AutoEngine {
         }
     }
 
+    /// Searching = nothing answers: every line failed this session or waits its retry, the line in use among the failed
+    /// (LineHealth.allOut) — or the failover exhausted its alternatives (`force`). Before entering it the line in use is
+    /// probed against the fallback once: an answer there means the target is down, not the lines, and the probes move to
+    /// the fallback. Entering turns the clock to the search pace; leaving re-seeds it, forgives every line and reports.
+    private func updateSearching(force: Bool = false) {
+        guard !measuring else { return }
+        let labels = lines.map { $0.label }
+        let dead = force || health.allOut(labels, current: label(current), result: { self.resultOf(label: $0) })
+        if dead, !searching, !schedule.fallback, let cur = line(current) {
+            measuring = true
+            measureOnce([cur], concurrency: 1, url: Etha.probeFallbackURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+                guard let self = self else { return }
+                self.measuring = false
+                if let ms = out[cur.id], ms > 0 {
+                    self.schedule.fallback = true
+                    self.results[cur.id] = ms
+                    self.health.ok(self.label(cur.id), ms: ms, now: AutoEngine.wall())
+                    self.tellLatency()
+                    self.log.warn("auto: the probe target gave no answer on any line but the fallback answers on \(cur.remark): measuring against the fallback until the target answers again")
+                } else {
+                    self.enterSearching(true)
+                }
+            }
+            return
+        }
+        if dead != searching { enterSearching(dead) }
+    }
+
     private func enterSearching(_ on: Bool) {
         searching = on
         let outage = on && (hint?.outage ?? false)
@@ -513,11 +603,15 @@ final class AutoEngine {
         let now = AutoEngine.mono()
         if on {
             searchSteps = 0
+            movedWhileSearching = false
             schedule.searchingBegan(now: now)
             report(trigger: "search", switched: false)
         } else {
+            health.forgive()                                   // what failed during the outage may well pass now
             schedule.reseed(now: now, order: order(), policy: policy, draw: Double.random(in: 0..<1))
-            report(trigger: "search", switched: true)
+            probesThisPass = 0
+            report(trigger: "search", switched: movedWhileSearching)
+            movedWhileSearching = false
         }
         store.saveLineHealth(health, on: network)
     }

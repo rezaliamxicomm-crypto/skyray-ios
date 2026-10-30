@@ -37,6 +37,16 @@ final class LineHealthTests: XCTestCase {
         XCTAssertTrue(h.due("x1", now: 100)); XCTAssertFalse(h.isDead("x1"))
     }
 
+    func testNothingAnswersWhenEveryLineFailedOrWaitsItsRetry() {
+        var h = LineHealth()
+        h.failed("x1", now: 1, policy: p); h.failed("x2", now: 1, policy: p)                      // in backoff: not probed this session
+        let results: [String: Int64] = ["r1": -1, "r2": -1]                                      // probed and failed
+        XCTAssertTrue(h.allOut(["r1", "r2", "x1", "x2"], current: "r1", result: { results[$0] ?? 0 }))
+        XCTAssertFalse(h.allOut(["r1", "r2", "x1", "x2", "w1"], current: "r1", result: { results[$0] ?? 0 }))   // w1 never probed, not held failed: not out
+        XCTAssertFalse(h.allOut(["r1", "r2", "x1"], current: "r1", result: { ["r1": 200, "r2": -1][$0] ?? 0 }))  // the line in use answers
+        XCTAssertFalse(LineHealth().allOut([], current: "r1", result: { _ in -1 }))
+    }
+
     func testItSurvivesTheStore() throws {
         var h = LineHealth(); h.ok("a", ms: 100, now: 5); h.failed("b", now: 6, policy: p)
         let back = try JSONDecoder().decode(LineHealth.self, from: JSONEncoder().encode(h))

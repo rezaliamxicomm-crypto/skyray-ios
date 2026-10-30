@@ -51,6 +51,10 @@ public enum Etha {
     /// An answer signed longer ago than this is taken only when no fresher one arrives in the race (a hop replaying an old
     /// answer); one older than the last accepted is never taken.
     public static let signedStaleAfter: Int64 = 3600
+    /// An answer signed longer ago than this is refused outright, whatever else answered (a hop replaying a captured answer).
+    public static let signedMaxAge: Int64 = 172_800
+    /// The held signed time never runs further ahead of the phone's clock than this (a box clock ahead must not strand the phone).
+    public static let signedHeldAhead: Int64 = 86_400
     public static let autoBalancerTag = "auto"
     /// Auto measures every line with two HEAD requests to the box's own probe target (a TEST-NET address Xray on the box
     /// sends to a 204 on loopback: no third party, no TLS); the fallback is tried once when no line answers the target.

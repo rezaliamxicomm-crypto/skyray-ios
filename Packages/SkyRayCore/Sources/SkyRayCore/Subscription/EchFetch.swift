@@ -88,6 +88,17 @@ public struct EchFetchResult: Equatable {
 
     /// Signed longer ago than Etha.signedStaleAfter: taken only when no fresher answer arrives (a hop replaying an old one).
     public func stale(now: Int64 = Int64(Date().timeIntervalSince1970)) -> Bool { signedAt > 0 && now - signedAt > Etha.signedStaleAfter }
+
+    /// Signed longer ago than Etha.signedMaxAge: never taken (a hop freezing a phone on a captured answer).
+    public func tooOld(now: Int64 = Int64(Date().timeIntervalSince1970)) -> Bool { signedAt > 0 && now - signedAt > Etha.signedMaxAge }
+
+    /// The box's own word: a subscription or an expiry with the signature on it. Only this ends the fetch race; any other
+    /// status is kept aside and shown only when nothing signed arrives (a hop answering 404 fast must not win).
+    public var signedWord: Bool { (status == 200 || status == 403) && trusted && error.isEmpty }
+
+    /// The signed time to hold, never more than Etha.signedHeldAhead past the phone's clock (a box clock ahead would
+    /// otherwise make every later answer "older than held").
+    public func heldSignedAt(now: Int64 = Int64(Date().timeIntervalSince1970)) -> Int64 { min(signedAt, now + Etha.signedHeldAhead) }
 }
 
 /// One link hop inside Iran: the name the link is fetched under there and the address dialled for it.

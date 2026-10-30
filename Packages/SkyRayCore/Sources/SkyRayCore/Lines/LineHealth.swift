@@ -55,6 +55,14 @@ public struct LineHealth: Codable, Equatable {
         return (good + unseen + dead).map { $0.1 }
     }
 
+    /// Nothing answers: every line is either held as failed here or failed its last probe this session (`result` -1), and
+    /// the line in use is among the failed. The moment Searching begins — a line waiting its retry counts as out, so backoff
+    /// can never hide a dead network behind "not probed yet".
+    public func allOut(_ labels: [String], current: String, result: (String) -> Int64) -> Bool {
+        guard !labels.isEmpty, result(current) < 0 else { return false }
+        return labels.allSatisfy { result($0) < 0 || isDead($0) }
+    }
+
     /// The best line known good right now, other than `except`; nil when none is known good.
     public func bestKnown(_ lines: [String], except: String? = nil) -> String? {
         bestFirst(lines).first { $0 != except && !isDead($0) && lastMs($0) != nil }

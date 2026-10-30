@@ -23,7 +23,12 @@ final class AutoScheduleTests: XCTestCase {
         XCTAssertNil(s.action(now: 13, warm: false, watched: false, searching: false, current: "r1", due: all))                          // idle now: nothing
         XCTAssertEqual(s.pace(policy: p, draw: 0.5), 30, accuracy: 0.001)                                                                  // 180 s over 6 lines
         XCTAssertNil(s.action(now: 41, warm: true, watched: false, searching: false, current: "r1", due: all))
-        XCTAssertEqual(s.action(now: 42, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r2"]))        // one at a time from here
+        XCTAssertEqual(s.action(now: 42, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r1"]))        // one at a time from here, the line in use among them
+        _ = s.probed(now: 42, ids: ["r1"], policy: p, draw: 0.5)
+        XCTAssertEqual(s.action(now: 72, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r2"]))
+        // the pace spreads the round over the lines that can be probed, not over lines waiting their retry
+        _ = s.probed(now: 72, ids: ["r2"], policy: p, draw: 0.5, active: 2)
+        XCTAssertEqual(s.nextProbeAt!, 72 + 90, accuracy: 0.001)                                                                 // 180 s over 2 live lines
     }
 
     func testASteadyStepNeedsAWarmRadioOrTheScreenAndTheFirstPassNeedsNeither() {
@@ -31,8 +36,8 @@ final class AutoScheduleTests: XCTestCase {
         XCTAssertNil(s.action(now: 60, warm: false, watched: false, searching: false, current: "r1", due: all))          // cold and unwatched: the phone sleeps
         XCTAssertEqual(s.action(now: 60, warm: false, watched: true, searching: false, current: "r1", due: all), .probeCurrent)   // on screen: the line in use first
         s.currentProbed(now: 60, policy: p)
-        XCTAssertEqual(s.action(now: 60, warm: false, watched: true, searching: false, current: "r1", due: all), .probe(["r2"]))  // …then the step
-        XCTAssertEqual(s.action(now: 60, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r2"]))  // traffic flowing: the step, no current
+        XCTAssertEqual(s.action(now: 60, warm: false, watched: true, searching: false, current: "r1", due: all), .probe(["r1"]))  // …then the step (steady: the line in use is in the rotation)
+        XCTAssertEqual(s.action(now: 60, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r1"]))  // traffic flowing: the step, no extra current probe
         var f = AutoSchedule(); f.start(now: 0, order: lines)
         XCTAssertEqual(f.action(now: 0, warm: false, watched: false, searching: false, current: "r1", due: all), .probeCurrent)   // the first pass asks nobody
     }
@@ -42,9 +47,9 @@ final class AutoScheduleTests: XCTestCase {
         s.reseed(now: 0, order: lines, policy: p, draw: 0.5)
         XCTAssertNil(s.action(now: 29, warm: true, watched: true, searching: false, current: "r1", due: all))
         XCTAssertEqual(s.action(now: 30, warm: true, watched: true, searching: false, current: "r1", due: all), .probeCurrent)
-        XCTAssertEqual(s.action(now: 30, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r2"]))        // not watched: the trickle only (its step is due too)
+        XCTAssertEqual(s.action(now: 30, warm: true, watched: false, searching: false, current: "r1", due: all), .probe(["r1"]))        // not watched: the trickle only (its step is due too)
         s.currentProbed(now: 30, policy: p)
-        XCTAssertEqual(s.action(now: 30, warm: true, watched: true, searching: false, current: "r1", due: all), .probe(["r2"]))         // both due: the current came first, the step follows
+        XCTAssertEqual(s.action(now: 30, warm: true, watched: true, searching: false, current: "r1", due: all), .probe(["r1"]))         // both due: the current came first, the step follows
     }
 
     func testTheJitterKeepsEachStepWithinTenPercentOfThePace() {
@@ -74,7 +79,10 @@ final class AutoScheduleTests: XCTestCase {
         var s = AutoSchedule(); s.reseed(now: 0, order: lines, policy: p, draw: 0.5)
         XCTAssertNil(s.action(now: 600, warm: false, watched: false, searching: false, current: "r1", due: all))
         s.wake(now: 600)
-        XCTAssertEqual(s.action(now: 600, warm: true, watched: false, searching: false, current: "r1", due: all), .probeCurrent)        // forced: even unwatched
+        XCTAssertEqual(s.action(now: 600, warm: false, watched: false, searching: false, current: "r1", due: all), .probeCurrent)       // one probe of the line in use, watched or not
+        s.currentProbed(now: 600, policy: p)
+        XCTAssertNil(s.action(now: 601, warm: false, watched: false, searching: false, current: "r1", due: all))                       // then the trickle waits for the radio or the screen: no forced pass
+        XCTAssertFalse(s.forced)
         var fresh = AutoSchedule(); fresh.wake(now: 5)
         XCTAssertNil(fresh.action(now: 5, warm: true, watched: true, searching: false, current: "r1", due: all))                        // before Connect: nothing to wake
     }
@@ -95,11 +103,15 @@ final class AutoScheduleTests: XCTestCase {
         var s = AutoSchedule(); s.reseed(now: 0, order: ["a", "b", "c"], policy: p, draw: 0.5)
         s.searchingBegan(now: 50)
         XCTAssertEqual(s.action(now: 50, warm: false, watched: false, searching: true, current: "a", due: { _ in false }), .probe(["a", "b"]))   // every line, the line in use too, two at a time
-        s.searchStep(now: 50, count: 2)
-        XCTAssertNil(s.action(now: 50.5, warm: false, watched: false, searching: true, current: "a", due: all))
-        XCTAssertEqual(s.action(now: 51, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["c"]))        // to the end of the rotation…
-        s.searchStep(now: 51, count: 1)
-        XCTAssertEqual(s.action(now: 52, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["a", "b"]))   // …then round again
+        s.searchStep(now: 50, count: 2, policy: p)
+        XCTAssertNil(s.action(now: 79, warm: false, watched: false, searching: true, current: "a", due: all))                         // paced: 3 lines, two a step → a step every 30 s, each line once a minute
+        XCTAssertEqual(s.action(now: 80, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["c"]))        // to the end of the rotation…
+        s.searchStep(now: 80, count: 1, policy: p, slow: true)                                                                         // the box says the network blocks every line: three times slower
+        XCTAssertNil(s.action(now: 169, warm: false, watched: false, searching: true, current: "a", due: all))
+        XCTAssertEqual(s.action(now: 170, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["a", "b"]))  // …then round again
+        s.searchStep(now: 170, count: 2, policy: p)
+        XCTAssertNil(s.action(now: 700, warm: false, watched: false, searching: true, current: "a", due: all))                        // ten minutes in: only warm or watched
+        XCTAssertEqual(s.action(now: 700, warm: true, watched: false, searching: true, current: "a", due: all), .probe(["c"]))
     }
 
     func testTheFallbackLastsOnlyWhileTheTargetAnswersNobody() {

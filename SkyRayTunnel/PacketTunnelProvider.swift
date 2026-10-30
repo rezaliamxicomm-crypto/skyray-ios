@@ -72,7 +72,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                         self.startHev()
                         let version = LibXrayBridge.xrayVersion()
                         self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version; $0.results = nil; $0.lastRoundAt = nil
-                                                       $0.searching = nil; $0.latencyMs = nil; $0.latencyAt = nil }
+                                                       $0.searching = nil; $0.outage = nil; $0.failoverAt = nil; $0.latencyMs = nil; $0.latencyAt = nil }
                         self.log.info("tunnel up: xray \(version), fd \(fd), socks \(self.socksPort), api \(self.apiPort)")
                         self.startEngine(on: line, policy: AutoPolicy.parse(snapshot.info.autoPolicy), hint: Hint.parse(snapshot.info.hint))
                         self.startMemoryLog()

@@ -11,8 +11,8 @@ import SkyRayCore
 /// inbound as its proxy, as before.
 final class Probe {
     let port: Int
-    private let session: URLSession
     private let timeoutMs: Int
+    private var sessionMade: URLSession?
 
     convenience init(port: Int, timeoutSeconds: Int = 10) { self.init(port: port, timeoutMs: timeoutSeconds * 1000) }
 
@@ -20,16 +20,24 @@ final class Probe {
     init(port: Int, timeoutMs: Int) {
         self.port = port
         self.timeoutMs = max(200, timeoutMs)
+    }
+
+    /// The URLSession, made only when an https target (the fallback) is measured: the raw-socket path needs none, and a
+    /// session per probe would be hundreds an hour in a process the system kills near 50 MiB.
+    private var session: URLSession {
+        if let s = sessionMade { return s }
         let config = URLSessionConfiguration.ephemeral
         config.connectionProxyDictionary = [
             "HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": port,
             "HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": port
         ]
-        config.timeoutIntervalForRequest = TimeInterval(self.timeoutMs) / 1000
-        config.timeoutIntervalForResource = TimeInterval(self.timeoutMs) / 1000 + 2
+        config.timeoutIntervalForRequest = TimeInterval(timeoutMs) / 1000
+        config.timeoutIntervalForResource = TimeInterval(timeoutMs) / 1000 + 2
         config.waitsForConnectivity = false
         config.urlCache = nil
-        session = URLSession(configuration: config)
+        let s = URLSession(configuration: config)
+        sessionMade = s
+        return s
     }
 
     /// The warm round trip in milliseconds — two requests down the kept-alive connection, the smaller one, as
@@ -52,8 +60,8 @@ final class Probe {
         return first
     }
 
-    /// The session's connections closed; the probe is not used after this.
-    func invalidate() { session.finishTasksAndInvalidate() }
+    /// The session's connections closed (when one was made); the probe is not used after this.
+    func invalidate() { sessionMade?.finishTasksAndInvalidate(); sessionMade = nil }
 
     // MARK: https — URLSession through the inbound
 
