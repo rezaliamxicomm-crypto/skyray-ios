@@ -4,7 +4,7 @@ import Foundation
 /// line of the subscription behind one balancer; the extension measures the lines through that core (AutoEngine) and
 /// holds the balancer to the best, so a change of line moves new connections only and cuts nothing that is open. The
 /// numbers here are the policy's defaults; the service's header X-Etha-Auto ("round=180,failed=900,idle=600,
-/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600,search=60,sfetch=300,settle=10,jitter=20") replaces any of them on the next
+/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600,search=60,sfetch=300,settle=10,jitter=10") replaces any of them on the next
 /// fetch, so they change without a release.
 public struct AutoPolicy: Equatable, Codable {
     /// every line measured again this often, while the tunnel is in use
@@ -33,12 +33,12 @@ public struct AutoPolicy: Equatable, Codable {
     /// on a core a second old and reads high, so the first pick can be a poor one for a whole round (2026-10-30)
     public var settleSec: Int = 10
     /// each round's interval is roundSec give or take this share, drawn anew every round, so the bursts are not periodic
-    public var jitterPct: Int = 20
+    public var jitterPct: Int = 10
 
     public init() {}
     public init(roundSec: Int, failedRetrySec: Int, idleSec: Int, marginPct: Int, floorMs: Int, stallSec: Int,
                 probeTimeoutSec: Int, concurrency: Int, freshSec: Int, searchSec: Int = 60, searchFetchSec: Int = 300,
-                settleSec: Int = 10, jitterPct: Int = 20) {
+                settleSec: Int = 10, jitterPct: Int = 10) {
         self.roundSec = roundSec; self.failedRetrySec = failedRetrySec; self.idleSec = idleSec; self.marginPct = marginPct
         self.floorMs = floorMs; self.stallSec = stallSec; self.probeTimeoutSec = probeTimeoutSec; self.concurrency = concurrency
         self.freshSec = freshSec; self.searchSec = searchSec; self.searchFetchSec = searchFetchSec
@@ -94,13 +94,6 @@ public struct AutoPolicy: Equatable, Codable {
         let since = now.addingTimeInterval(-TimeInterval(stallSec))
         guard let base = samples.last(where: { $0.at <= since }), base != newest else { return false }
         return newest.up - base.up >= AutoPolicy.stallMinUpBytes && newest.down - base.down <= 0
-    }
-
-    /// Is a line due for a probe in this round? Failed lines wait failedRetrySec, the rest the round's interval —
-    /// roundSec, or the jittered one the engine drew for this round.
-    public func due(now: Date, probedAt: Date?, failed: Bool, roundInterval: TimeInterval? = nil) -> Bool {
-        guard let at = probedAt else { return true }
-        return now.timeIntervalSince(at) >= (failed ? TimeInterval(failedRetrySec) : (roundInterval ?? TimeInterval(roundSec)))
     }
 
     /// The header's "key=value" list over base: unknown keys ignored, each value clamped to its range, a value that is
