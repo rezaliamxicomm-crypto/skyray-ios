@@ -35,11 +35,49 @@ public enum LineReport {
         return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0);l=\(items.joined(separator: ","))"
     }
 
-    /// One text for a set of lines: the same set → the same text, whatever their ids (the line's link without its name).
+    /// One text for a set of lines: the same set → the same text, whatever their ids (the line's link without its name)
+    /// and whatever Cloudflare's ECH configuration of the hour — the `ech=` value and the `echConfigList` inside an XHTTP
+    /// line's `extra=` (its download leg) are left out, or every refresh after Cloudflare rotates it (about hourly)
+    /// would count as new lines and restart the running core; a stale configuration is refreshed at the next Connect.
     public static func fingerprint(_ lines: [Line]) -> String {
         lines.map { line -> String in
             let link = line.link
-            return (link.firstIndex(of: "#").map { String(link[..<$0]) } ?? link) + "#" + line.remark
+            let bare = link.firstIndex(of: "#").map { String(link[..<$0]) } ?? link
+            return stableLink(bare) + "#" + line.remark
         }.sorted().joined(separator: "|")
+    }
+
+    /// The link's query without its volatile parts: `ech=` dropped, `extra=` re-encoded with sorted keys and without
+    /// `downloadSettings.tlsSettings.echConfigList`; anything unparseable is kept as it is.
+    static func stableLink(_ link: String) -> String {
+        guard let q = link.firstIndex(of: "?") else { return link }
+        let base = String(link[..<q])
+        let params = link[link.index(after: q)...].split(separator: "&", omittingEmptySubsequences: true).map(String.init)
+        var kept: [String] = []
+        for param in params {
+            let key = param.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? param
+            if key.lowercased() == "ech" { continue }
+            if key.lowercased() == "extra", let eq = param.firstIndex(of: "=") {
+                kept.append("extra=" + stableExtra(String(param[param.index(after: eq)...])))
+                continue
+            }
+            kept.append(param)
+        }
+        return kept.isEmpty ? base : base + "?" + kept.joined(separator: "&")
+    }
+
+    private static func stableExtra(_ encoded: String) -> String {
+        guard let json = encoded.removingPercentEncoding, let data = json.data(using: .utf8),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return encoded }
+        if var download = object["downloadSettings"] as? [String: Any] {
+            if var tls = download["tlsSettings"] as? [String: Any] {
+                tls.removeValue(forKey: "echConfigList")
+                download["tlsSettings"] = tls
+            }
+            object["downloadSettings"] = download
+        }
+        guard let out = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let text = String(data: out, encoding: .utf8) else { return encoded }
+        return text
     }
 }

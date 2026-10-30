@@ -31,4 +31,23 @@ final class LineReportTests: XCTestCase {
         XCTAssertEqual(a, b)
         XCTAssertNotEqual(a, LineReport.fingerprint([line("1", "vless://u@1.1.1.1:443#x"), line("2", "vless://u@3.3.3.3:443#y")]))
     }
+
+    func testTheFingerprintIgnoresCloudflaresEchConfigurationButNotTheRest() {
+        func line(_ link: String) -> Line { Line(id: UUID().uuidString, link: link, remark: "EthaVPN-WS-www-CleanIP1-ECH3-443", transport: "WS", endpointLabel: nil, port: 443, order: 0, outboundJSON: "{}") }
+        let a = "vless://u1@1.1.1.1:443?type=ws&security=tls&sni=www.example.org&ech=AAAAconfigOne#x"
+        let b = "vless://u1@1.1.1.1:443?type=ws&security=tls&sni=www.example.org&ech=BBBBconfigTwo#x"
+        XCTAssertEqual(LineReport.fingerprint([line(a)]), LineReport.fingerprint([line(b)]))
+        XCTAssertNotEqual(LineReport.fingerprint([line(a)]), LineReport.fingerprint([line(a.replacingOccurrences(of: "u1@", with: "u2@"))]))   // a new user id is a change
+        XCTAssertNotEqual(LineReport.fingerprint([line(a)]), LineReport.fingerprint([line(a.replacingOccurrences(of: "1.1.1.1", with: "2.2.2.2"))]))
+        // the XHTTP download leg carries the configuration inside extra=
+        let extra1 = "%7B%22downloadSettings%22%3A%7B%22address%22%3A%22d.example.org%22%2C%22tlsSettings%22%3A%7B%22serverName%22%3A%22d.example.org%22%2C%22echConfigList%22%3A%22AAAA%22%7D%7D%7D"
+        let extra2 = "%7B%22downloadSettings%22%3A%7B%22address%22%3A%22d.example.org%22%2C%22tlsSettings%22%3A%7B%22serverName%22%3A%22d.example.org%22%2C%22echConfigList%22%3A%22BBBB%22%7D%7D%7D"
+        let x1 = "vless://u1@1.1.1.1:443?type=xhttp&extra=\(extra1)&ech=AAAA#x"
+        let x2 = "vless://u1@1.1.1.1:443?type=xhttp&extra=\(extra2)&ech=BBBB#x"
+        XCTAssertEqual(LineReport.fingerprint([line(x1)]), LineReport.fingerprint([line(x2)]))
+        let x3 = "vless://u1@1.1.1.1:443?type=xhttp&extra=\(extra1.replacingOccurrences(of: "d.example.org", with: "e.example.org"))&ech=AAAA#x"
+        XCTAssertNotEqual(LineReport.fingerprint([line(x1)]), LineReport.fingerprint([line(x3)]))   // another download host is a change
+        XCTAssertEqual(LineReport.stableLink("vless://u@h:443"), "vless://u@h:443")
+        XCTAssertEqual(LineReport.stableLink("vless://u@h:443?ech=zzz"), "vless://u@h:443")
+    }
 }
