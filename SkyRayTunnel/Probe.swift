@@ -137,8 +137,8 @@ final class Probe {
         let authority = host + (url.port.map { ":\($0)" } ?? "")
         let target = host + ":\(url.port ?? 80)"
         let path = url.path.isEmpty ? "/" : url.path
-        let connect = "CONNECT \(target) HTTP/1.1\r\nHost: \(target)\r\nUser-Agent: SkyRay\r\n\r\n"
-        guard rawExchange(fd, connect) != nil else { Darwin.close(fd); return nil }
+        let connectRequest = "CONNECT \(target) HTTP/1.1\r\nHost: \(target)\r\nUser-Agent: SkyRay\r\n\r\n"   // not `connect`: that name is the socket call above
+        guard rawExchange(fd, connectRequest) != nil else { Darwin.close(fd); return nil }
         request = "HEAD \(path) HTTP/1.1\r\nHost: \(authority)\r\nUser-Agent: SkyRay\r\nConnection: keep-alive\r\n\r\n"
         guard let first = rawExchange(fd, request) else { Darwin.close(fd); return nil }
         self.fd = fd
