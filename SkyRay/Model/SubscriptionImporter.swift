@@ -10,7 +10,8 @@ import SkyRayXray
 /// own network and through the running tunnel start together, the link hop inside Iran (the core's plain fetch, the
 /// hop's name not listed, dialled at its address) after a head start for ECH — at once on a network where the hop
 /// answered first last time. The first server answer wins, whatever it said. Only when nobody answered on any of
-/// them is the link fetched once more as before 1.3.6, by URLSession without ECH — the operator's last resort.
+/// them is the link fetched once more as before 1.3.6, by name without ECH — the operator's last resort — through the core
+/// like every other way (2.1), so the certificate and the box's signature are checked the same.
 /// What Auto measured rides on every way as the header X-Etha-Lines (TunnelState.lineReport, LineReport).
 struct SubscriptionImporter {
     let store: SkyRayStore

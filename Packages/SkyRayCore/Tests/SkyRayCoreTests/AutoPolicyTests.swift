@@ -38,7 +38,7 @@ final class AutoPolicyTests: XCTestCase {
         let s = [AutoPolicy.Sample(at: t0, up: 1000, down: 5000), AutoPolicy.Sample(at: t0 + 4, up: 4000, down: 5000),
                  AutoPolicy.Sample(at: t0 + 8, up: 9000, down: 5000)]
         XCTAssertTrue(p.stalled(s, now: t0 + 8))
-        XCTAssertFalse(p.stalled(s, now: t0 + 7))
+        XCTAssertFalse(p.stalled(s, now: t0 + 3))                                                   // the 4-s window is not full yet
         XCTAssertFalse(p.stalled([AutoPolicy.Sample(at: t0, up: 1000, down: 5000), AutoPolicy.Sample(at: t0 + 8, up: 1500, down: 5000)], now: t0 + 8))
         XCTAssertFalse(p.stalled([AutoPolicy.Sample(at: t0, up: 1000, down: 5000), AutoPolicy.Sample(at: t0 + 8, up: 9000, down: 5100)], now: t0 + 8))
         XCTAssertFalse(p.stalled([AutoPolicy.Sample(at: t0, up: 1000, down: 5000)], now: t0 + 8))
