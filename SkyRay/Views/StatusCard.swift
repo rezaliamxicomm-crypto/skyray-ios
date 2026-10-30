@@ -105,8 +105,9 @@ struct HeroView: View {
     private var chip: (text: String, red: Bool)? {
         if model.testing { return (L("testing"), false) }
         if model.searching { return (L("no.line.answers") + " · " + model.ago(model.latencyAt), true) }
-        if model.latencyMs > 0 { return ("\(model.latencyMs) ms · " + model.ago(model.latencyAt), false) }
-        return nil
+        guard let at = model.latencyAt else { return (L("state.connecting"), false) }          // the first measurement is on its way
+        if model.latencyMs > 0 { return ("\(model.latencyMs) ms · " + model.ago(at), false) }
+        return (L("no.answer.yet") + " · " + model.ago(at), true)                              // the line in use failed its probe; Auto is on it
     }
 }
 

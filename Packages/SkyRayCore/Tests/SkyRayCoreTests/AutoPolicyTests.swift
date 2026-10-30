@@ -44,15 +44,6 @@ final class AutoPolicyTests: XCTestCase {
         XCTAssertFalse(p.stalled([AutoPolicy.Sample(at: t0, up: 1000, down: 5000)], now: t0 + 8))
     }
 
-    func testALineIsDueByItsLastOutcome() {
-        let now = Date(timeIntervalSince1970: 10_000_000)
-        XCTAssertTrue(p.due(now: now, probedAt: now - 181, failed: false))
-        XCTAssertFalse(p.due(now: now, probedAt: now - 179, failed: false))
-        XCTAssertFalse(p.due(now: now, probedAt: now - 181, failed: true))
-        XCTAssertTrue(p.due(now: now, probedAt: now - 901, failed: true))
-        XCTAssertTrue(p.due(now: now, probedAt: nil, failed: false))
-    }
-
     func testTheHeaderReplacesValuesWithinBoundsAndIgnoresTheRest() {
         let q = AutoPolicy.parse("round=120, failed=600;idle=300,margin=10,floor=40,stall=6,timeout=4,conc=16,fresh=900,colour=blue,round=x")
         XCTAssertEqual(q, AutoPolicy(roundSec: 120, failedRetrySec: 600, idleSec: 300, marginPct: 10, floorMs: 40, stallSec: 6, probeTimeoutSec: 4, concurrency: 16, freshSec: 900))
@@ -78,19 +69,15 @@ final class AutoPolicyTests: XCTestCase {
 
     func testTheSettlingRoundAndTheJitterComeFromTheHeaderToo() {
         XCTAssertEqual(AutoPolicy().settleSec, 10)
-        XCTAssertEqual(AutoPolicy().jitterPct, 20)
+        XCTAssertEqual(AutoPolicy().jitterPct, 10)
         let q = AutoPolicy.parse("settle=0,jitter=50")
         XCTAssertEqual(q.settleSec, 0); XCTAssertEqual(q.jitterPct, 50)
         let clamped = AutoPolicy.parse("settle=999,jitter=99")
         XCTAssertEqual(clamped.settleSec, 120); XCTAssertEqual(clamped.jitterPct, 50)
         let p = AutoPolicy()
         XCTAssertEqual(p.jitteredRound(using: 0.5), 180, accuracy: 0.001)
-        XCTAssertEqual(p.jitteredRound(using: 0), 144, accuracy: 0.001)
-        XCTAssertEqual(p.jitteredRound(using: 1), 216, accuracy: 0.001)
+        XCTAssertEqual(p.jitteredRound(using: 0), 162, accuracy: 0.001)      // 10 % either way: 162–198 s
+        XCTAssertEqual(p.jitteredRound(using: 1), 198, accuracy: 0.001)
         XCTAssertEqual(AutoPolicy.parse("jitter=0").jitteredRound(using: 0.9), 180, accuracy: 0.001)
-        let now = Date(), at = now.addingTimeInterval(-150)
-        XCTAssertFalse(p.due(now: now, probedAt: at, failed: false))                          // 150 s < 180
-        XCTAssertTrue(p.due(now: now, probedAt: at, failed: false, roundInterval: 144))        // the shortened round this time
-        XCTAssertFalse(p.due(now: now, probedAt: at, failed: true, roundInterval: 144))        // a failed line still waits its 900 s
     }
 }

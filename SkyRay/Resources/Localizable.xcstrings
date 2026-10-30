@@ -2192,6 +2192,29 @@
           }
         }
       }
+    },
+    "no.answer.yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No answer yet"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "هنوز جوابی نیامده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пока нет ответа"
+          }
+        }
+      }
     }
   }
 }

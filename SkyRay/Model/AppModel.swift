@@ -90,9 +90,10 @@ final class AppModel: ObservableObject {
         case .idle: break
         }
         switch vpn.status {
-        // Connected, but the first measurement not in yet: the screen says "Connecting…" a few seconds longer (the
-        // operator's wording, 2026-10-30) rather than "Connected" over an empty chip — traffic already flows meanwhile.
-        case .connected: return L(searching ? "state.searching" : (latencyMs > 0 ? "state.connected" : "state.connecting"))
+        // Connected the moment the tunnel is up: traffic flows. The chip under it says "Connecting…" until the first
+        // measurement is in (the operator's wording), then the number — or "no answer yet" when the line in use failed its
+        // probe (2.0.2 kept saying Connecting… in that case, which read as nothing happening).
+        case .connected: return L(searching ? "state.searching" : "state.connected")
         case .connecting, .reasserting: return L("state.connecting")
         case .disconnecting: return L("state.disconnecting")
         default: return L("state.notconnected")
@@ -177,7 +178,7 @@ final class AppModel: ObservableObject {
     /// is every ten.
     private func pollUntilFirstLatency() async {
         for _ in 0..<10 {
-            guard isConnected, latencyMs <= 0, !searching else { return }
+            guard isConnected, latencyAt == nil, !searching else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await pollStatus()
         }
@@ -192,7 +193,7 @@ final class AppModel: ObservableObject {
 
     private func take(_ reply: TunnelReply) {
         tunnel = reply
-        if let ms = reply.latencyMs { latencyMs = ms; latencyAt = reply.latencyAt ?? Date() }
+        if let ms = reply.latencyMs, let at = reply.latencyAt { latencyMs = ms; latencyAt = at }   // nil until the extension measured
         let wasSearching = searching
         searching = reply.searching ?? false
         if searching { outcomeKey = nil }
