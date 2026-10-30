@@ -47,6 +47,8 @@ final class AppModel: ObservableObject {
     private var launched = false
     private var rateOnLatency = false         // the customer just connected by hand: the first time that lands decides the rating ask
     private var lastSearchFetchAt: Date?
+    private var lastFailoverSeen: Date?
+    private var lastFailoverFetchAt: Date?
 
     init(store: SkyRayStore = .appGroup()) {
         self.store = store
@@ -104,7 +106,7 @@ final class AppModel: ObservableObject {
 
     /// Under the buttons: what to do while no line answers, else what the last test did; nil = nothing.
     var outcomeText: String? {
-        if isConnected, searching { return L("searching.hint") }
+        if isConnected, searching { return L(tunnel?.outage == true ? "lines.blocked" : "searching.hint") }   // the box's word when every phone of the network fails
         return outcomeKey.map { L($0) }
     }
 
@@ -203,6 +205,14 @@ final class AppModel: ObservableObject {
         }
         if searching, !wasSearching || (lastSearchFetchAt.map { Date().timeIntervalSince($0) } ?? .infinity) >= searchFetchInterval {
             Task { await refetchWhileSearching() }
+        }
+        // Auto left a dead line (2.1): one quiet fetch, so the box hears of it soon and the lines are fresh — at most one in ten minutes
+        if let at = reply.failoverAt, at > (lastFailoverSeen ?? .distantPast) {
+            lastFailoverSeen = at
+            if (lastFailoverFetchAt.map { Date().timeIntervalSince($0) } ?? .infinity) >= 600, !refreshing {
+                lastFailoverFetchAt = Date()
+                Task { await refreshQuietly(reason: "failover") }
+            }
         }
     }
 

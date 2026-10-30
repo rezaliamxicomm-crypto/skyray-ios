@@ -14,12 +14,14 @@ public struct EchFetchRequest: Codable, Equatable {
     public var interface: String            // bind every socket to it (the phone's own, past a running tunnel); "" = no binding
     public var plain: Bool                  // no ECH: a plain TLS fetch to `addresses`, the url's host as the certificate's name (the link hop inside Iran)
     public var headers: [String: String]    // extra request headers, every way (X-Etha-Lines: what Auto measured)
+    public var signKeys: [String]           // the box's public keys (Etha.signKeys): the core checks the answer's signature against them (2.1)
 
     public init(url: String, addresses: [String], pinnedAddresses: [String], resolvers: [String], lookupName: String,
-                pinnedKey: String, userAgent: String, timeoutMs: Int64, interface: String, plain: Bool = false, headers: [String: String] = [:]) {
+                pinnedKey: String, userAgent: String, timeoutMs: Int64, interface: String, plain: Bool = false, headers: [String: String] = [:],
+                signKeys: [String] = Etha.signKeys) {
         self.url = url; self.addresses = addresses; self.pinnedAddresses = pinnedAddresses; self.resolvers = resolvers
         self.lookupName = lookupName; self.pinnedKey = pinnedKey; self.userAgent = userAgent
-        self.timeoutMs = timeoutMs; self.interface = interface; self.plain = plain; self.headers = headers
+        self.timeoutMs = timeoutMs; self.interface = interface; self.plain = plain; self.headers = headers; self.signKeys = signKeys
     }
 
     /// The JSON text the core reads.
@@ -38,6 +40,8 @@ public struct EchFetchResult: Equatable {
     public var echAccepted: Bool = false
     public var address: String = ""
     public var keySource: String = ""            // "dns:<resolver>", "pinned" or "retry"; "plain" when no ECH was asked
+    public var signed: String = ""               // the answer's signature against the pinned keys: ok | none | bad | unknown-key | nokeys (2.1; "" from a core without the check)
+    public var signedAt: Int64 = 0               // when the box signed it, unix seconds; 0 unsigned
     public var error: String = ""
 
     public init() {}
@@ -53,22 +57,37 @@ public struct EchFetchResult: Equatable {
         result.echAccepted = (object["echAccepted"] as? Bool) ?? false
         result.address = (object["address"] as? String) ?? ""
         result.keySource = (object["keySource"] as? String) ?? ""
+        result.signed = (object["signed"] as? String) ?? ""
+        result.signedAt = (object["signedAt"] as? NSNumber)?.int64Value ?? 0
         result.error = (object["error"] as? String) ?? ""
         return result
     }
 
     /// The server itself answered, with ECH — any status. Only a fetch that reached nobody is worth another way.
-    public var answered: Bool { error.isEmpty && echAccepted && status > 0 }
+    public var answered: Bool { error.isEmpty && echAccepted && status > 0 && trusted }
 
     /// The hop itself answered, plain — any status. Only a hop that reached nobody is worth the next one.
-    public var plainAnswered: Bool { error.isEmpty && status > 0 }
+    public var plainAnswered: Bool { error.isEmpty && status > 0 && trusted }
+
+    /// The box's own word (2.1): a subscription (200) or an expiry (403) counts only with the box's signature on it
+    /// (echfetch/signature.go against Etha.signKeys). The hop inside Iran terminates TLS: without this a seized hop could
+    /// hand the app other lines, a herding hint or a false expiry. Any other status carries no signature and is taken as
+    /// it is (nothing of it is acted upon beyond a message). A build pinning no key checks nothing.
+    public var trusted: Bool {
+        guard status == 200 || status == 403, !Etha.signKeys.isEmpty else { return true }
+        return signed == "ok"
+    }
 
     /// Why a fetch gave nothing, for the log — never a body, never a token.
     public var failure: String {
         if !error.isEmpty { return error }
         if !echAccepted && keySource != "plain" { return "ECH not accepted" }
+        if (status == 200 || status == 403) && !trusted { return "status \(status), signature \(signed.isEmpty ? "unchecked (old core)" : signed)" }
         return "status \(status)"
     }
+
+    /// Signed longer ago than Etha.signedStaleAfter: taken only when no fresher answer arrives (a hop replaying an old one).
+    public func stale(now: Int64 = Int64(Date().timeIntervalSince1970)) -> Bool { signedAt > 0 && now - signedAt > Etha.signedStaleAfter }
 }
 
 /// One link hop inside Iran: the name the link is fetched under there and the address dialled for it.

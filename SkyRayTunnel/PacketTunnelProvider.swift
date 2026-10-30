@@ -74,7 +74,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                         self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version; $0.results = nil; $0.lastRoundAt = nil
                                                        $0.searching = nil; $0.latencyMs = nil; $0.latencyAt = nil }
                         self.log.info("tunnel up: xray \(version), fd \(fd), socks \(self.socksPort), api \(self.apiPort)")
-                        self.startEngine(on: line, policy: AutoPolicy.parse(snapshot.info.autoPolicy))
+                        self.startEngine(on: line, policy: AutoPolicy.parse(snapshot.info.autoPolicy), hint: Hint.parse(snapshot.info.hint))
                         self.startMemoryLog()
                         self.startPathMonitor()
                         completionHandler(nil)
@@ -97,7 +97,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.hev.stop()
             try? LibXrayBridge.stopXray()
             self.active = nil
-            self.store.updateTunnelState { $0.activeLineId = nil; $0.startedAt = nil; $0.searching = nil; $0.latencyMs = nil }
+            self.store.updateTunnelState { $0.activeLineId = nil; $0.startedAt = nil; $0.searching = nil; $0.outage = nil; $0.latencyMs = nil }
             self.log.info("tunnel down: reason \(reason.rawValue)")
             completionHandler()
         }
@@ -167,9 +167,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startEngine(on line: Line, policy: AutoPolicy) {
+    private func startEngine(on line: Line, policy: AutoPolicy, hint: Hint?) {
         let members = lines.map { AutoEngine.Line(id: $0.id, remark: $0.remark, order: $0.order, probePort: probePorts[$0.id] ?? Etha.probePortFallback) }
         let engine = AutoEngine(queue: queue, store: store, log: log, lines: members, policy: policy, apiPort: apiPort, current: line.id,
+                                network: networkSignature, hint: hint,
                                 traffic: { [weak self] in
                                     let s = self?.hev.stats()
                                     return (up: Int64(s?.txBytes ?? 0), down: Int64(s?.rxBytes ?? 0))
@@ -217,7 +218,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         reasserting = false
         store.updateTunnelState { $0.results = nil; $0.lastRoundAt = nil; $0.searching = nil }
-        startEngine(on: keep, policy: AutoPolicy.parse(snapshot.info.autoPolicy))
+        startEngine(on: keep, policy: AutoPolicy.parse(snapshot.info.autoPolicy), hint: Hint.parse(snapshot.info.hint))
         log.info("reload: xray restarted on \(fresh.count) lines, on \(keep.remark)")
     }
 
@@ -238,14 +239,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         log.info("xray restarted in place on \(line.remark)")
     }
 
+    /// "cell", "wifi" or "other": the network the phone is on, as Auto keeps its memory of the lines (and as the app
+    /// remembers its fetch way; SubscriptionImporter.networkSignature reads the interfaces, this the path).
+    private var networkSignature = "other"
+
+    private static func signature(of path: NWPath) -> String {
+        if path.usesInterfaceType(.cellular) { return "cell" }
+        if path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet) { return "wifi" }
+        return "other"
+    }
+
     private func startPathMonitor() {
         let monitor = NWPathMonitor()
+        networkSignature = PacketTunnelProvider.signature(of: monitor.currentPath)
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self = self else { return }
             let satisfied = path.status == .satisfied
-            if satisfied && !self.pathWasSatisfied {
-                self.log.info("network is back; measuring again in 15 s")
-                self.engine?.onNetworkChanged()
+            let signature = PacketTunnelProvider.signature(of: path)
+            if satisfied && (!self.pathWasSatisfied || signature != self.networkSignature) {
+                self.log.info("network: \(self.networkSignature) → \(signature)\(self.pathWasSatisfied ? "" : " (back)"); measuring again in 15 s")
+                self.networkSignature = signature
+                self.engine?.onNetworkChanged(signature: signature)
             }
             self.pathWasSatisfied = satisfied
         }
@@ -286,6 +300,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         queue.async {
             let request = (try? JSONDecoder().decode(TunnelRequest.self, from: messageData)) ?? TunnelRequest(cmd: "status")
             let answer: () -> Void = { completionHandler?(try? JSONEncoder().encode(self.statusReply())) }
+            if request.cmd == "status" { self.engine?.noteWatched() }   // the app's chip is on screen: the line in use is kept fresh for it
             switch request.cmd {
             case "probe", "ping":   // since 2.0.0 one thing: every line measured through the running core, the answer says what it did
                 guard let engine = self.engine else { answer(); return }
@@ -320,6 +335,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         r.switchedAt = state.switchedAt
         r.xrayVersion = state.xrayVersion
         r.searching = state.searching
+        r.outage = state.outage
+        r.failoverAt = state.failoverAt
         r.latencyMs = state.latencyMs
         r.latencyAt = state.latencyAt
         return r

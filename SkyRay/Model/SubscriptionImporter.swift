@@ -83,10 +83,11 @@ struct SubscriptionImporter {
         let ways = Self.ways(url: url, token: EthaLink.token(of: url), stored: stored, hops: known.isEmpty ? Etha.linkHops : known,
                              tunnelUp: tunnelUp, physical: NetworkInterfaces.physical(), headers: headers,
                              hopHeadStartMs: EchFetch.hopHeadStartMs(rememberedWay: store.fetchWay(on: network)), userAgent: Self.userAgent)
-        if let winner = await Self.race(ways) {
+        if let winner = await Self.race(ways, heldSignedAt: store.lastSignedAt) {
             let (way, result) = winner
-            AppLog.info("fetch: \(way.name) answered first via \(result.address) (key: \(result.keySource)), status \(result.status); network \(network)")
+            AppLog.info("fetch: \(way.name) answered first via \(result.address) (key: \(result.keySource)), status \(result.status), signed \(result.signed.isEmpty ? "-" : result.signed)\(result.stale() ? " (stale, nothing fresher came)" : ""); network \(network)")
             store.rememberFetchWay(way.kind, on: network)
+            if result.signedAt > 0 { store.lastSignedAt = max(store.lastSignedAt ?? 0, result.signedAt) }
             if !report.isEmpty { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
             return try Self.read(status: result.status, headers: result.headers, body: Data(result.body.utf8))
         }
@@ -140,7 +141,10 @@ struct SubscriptionImporter {
 
     /// Every way started at its time; the first whose server answered wins, the others run out on their own (the
     /// core's call cannot be cut short) and their answers are dropped. nil when nobody answered.
-    private static func race(_ ways: [Way]) async -> (Way, EchFetchResult)? {
+    /// The first way whose answer is the box's own wins. The replay rules (2.1): an answer signed before the one this
+    /// phone already holds is never taken (a hop serving last week's answer); one signed longer ago than
+    /// Etha.signedStaleAfter is kept aside and taken only when no fresher answer comes from any way.
+    static func race(_ ways: [Way], heldSignedAt: Int64?) async -> (Way, EchFetchResult)? {
         await withTaskGroup(of: (Way, EchFetchResult?).self) { group in
             for way in ways {
                 group.addTask {
@@ -150,15 +154,25 @@ struct SubscriptionImporter {
                 }
             }
             var winner: (Way, EchFetchResult)?
+            var staleWinner: (Way, EchFetchResult)?
             for await (way, result) in group {
                 if let r = result, way.answered(r) {
+                    if let held = heldSignedAt, r.signedAt > 0, r.signedAt < held {
+                        AppLog.warn("fetch: \(way.name) answered with a subscription signed before the one held (\(r.signedAt) < \(held)): not taken")
+                        continue
+                    }
+                    if r.stale() {
+                        if staleWinner == nil { staleWinner = (way, r) }
+                        AppLog.warn("fetch: \(way.name) answered with a subscription signed \(Int64(Date().timeIntervalSince1970) - r.signedAt) s ago: kept aside")
+                        continue
+                    }
                     winner = (way, r)
                     group.cancelAll()
                     break
                 }
                 AppLog.warn("fetch: \(way.name) gave nothing: \(result?.failure ?? "no result from the core")")
             }
-            return winner
+            return winner ?? staleWinner
         }
     }
 

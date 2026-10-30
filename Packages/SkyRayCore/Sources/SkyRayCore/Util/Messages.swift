@@ -31,6 +31,8 @@ public struct TunnelReply: Codable, Equatable {
     public var log: String?
     public var error: String?
     public var searching: Bool?           // no line answers; Auto keeps measuring (2.0.0)
+    public var outage: Bool?              // the box says this network blocks every line right now (2.1): the text under Searching
+    public var failoverAt: Date?          // Auto last left a dead line then (2.1): the app fetches once, quietly
     public var latencyMs: Int64?          // the line in use's last time, -1 failed
     public var latencyAt: Date?
     public var outcome: String?           // of a "ping": switched | kept | none

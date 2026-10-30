@@ -40,7 +40,7 @@ jobs:
           TAG=$(sed -n 's/^tag=//p' Vendor/libxray-source.lock)
           GO=$(sed -n 's/^go=//p' Vendor/libxray-source.lock)
           # the release is named by its inputs: the same inputs never build twice, a changed one gets a new name
-          HASH=$(cat Vendor/libxray-source.lock echfetch/echfetch.go echfetch/echfetch_darwin.go libxray/echfetch_export.go libxray/autoctl_export.go scripts/build-libxray.sh | shasum -a 256 | cut -c1-10)
+          HASH=$(cat Vendor/libxray-source.lock echfetch/echfetch.go echfetch/echfetch_darwin.go echfetch/signature.go libxray/echfetch_export.go libxray/autoctl_export.go scripts/build-libxray.sh | shasum -a 256 | cut -c1-10)
           echo "release=libxray-$TAG-ech-$HASH" >> "$GITHUB_OUTPUT"
           echo "go=$GO" >> "$GITHUB_OUTPUT"
           echo "release libxray-$TAG-ech-$HASH, Go $GO"

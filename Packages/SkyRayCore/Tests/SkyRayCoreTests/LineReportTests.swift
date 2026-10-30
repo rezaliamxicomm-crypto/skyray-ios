@@ -50,4 +50,12 @@ final class LineReportTests: XCTestCase {
         XCTAssertEqual(LineReport.stableLink("vless://u@h:443"), "vless://u@h:443")
         XCTAssertEqual(LineReport.stableLink("vless://u@h:443?ech=zzz"), "vless://u@h:443")
     }
+
+    func testTheRateRidesAfterTheSwitchFlagOnlyWhenThereIsOne() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let with = LineReport.build(now: now, trigger: "auto", inUseRemark: "EthaVPN-REALITY-relay-FRA4-443", switched: false, results: [("EthaVPN-REALITY-relay-FRA4-443", 200)], rateKbps: 18500)
+        XCTAssertEqual(with, "v=1;t=1800000000;trig=auto;use=REALITY-relay-FRA4-443;sw=0;r=18500;l=REALITY-relay-FRA4-443:200")
+        let without = LineReport.build(now: now, trigger: "auto", inUseRemark: "EthaVPN-REALITY-relay-FRA4-443", switched: false, results: [("EthaVPN-REALITY-relay-FRA4-443", 200)])
+        XCTAssertEqual(without, "v=1;t=1800000000;trig=auto;use=REALITY-relay-FRA4-443;sw=0;l=REALITY-relay-FRA4-443:200")
+    }
 }

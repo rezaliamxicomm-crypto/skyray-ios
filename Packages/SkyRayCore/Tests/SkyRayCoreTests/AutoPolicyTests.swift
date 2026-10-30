@@ -67,17 +67,19 @@ final class AutoPolicyTests: XCTestCase {
         XCTAssertEqual(clamped.searchFetchSec, 3600)
     }
 
-    func testTheSettlingRoundAndTheJitterComeFromTheHeaderToo() {
-        XCTAssertEqual(AutoPolicy().settleSec, 10)
-        XCTAssertEqual(AutoPolicy().jitterPct, 10)
-        let q = AutoPolicy.parse("settle=0,jitter=50")
-        XCTAssertEqual(q.settleSec, 0); XCTAssertEqual(q.jitterPct, 50)
-        let clamped = AutoPolicy.parse("settle=999,jitter=99")
-        XCTAssertEqual(clamped.settleSec, 120); XCTAssertEqual(clamped.jitterPct, 50)
-        let p = AutoPolicy()
-        XCTAssertEqual(p.jitteredRound(using: 0.5), 180, accuracy: 0.001)
-        XCTAssertEqual(p.jitteredRound(using: 0), 162, accuracy: 0.001)      // 10 % either way: 162–198 s
-        XCTAssertEqual(p.jitteredRound(using: 1), 198, accuracy: 0.001)
-        XCTAssertEqual(AutoPolicy.parse("jitter=0").jitteredRound(using: 0.9), 180, accuracy: 0.001)
+    func testTheTrickleKnobsComeFromTheHeaderToo() {
+        let d = AutoPolicy()
+        XCTAssertEqual(d.firstPaceSec, 1); XCTAssertEqual(d.currentSec, 30); XCTAssertEqual(d.jitterPct, 10)
+        XCTAssertEqual(d.dwellSec, 90); XCTAssertEqual(d.persistPasses, 2); XCTAssertEqual(d.retryCapSec, 7200)
+        let q = AutoPolicy.parse("pace=5,cur=60,jitter=50,dwell=300,persist=3,cap=600")
+        XCTAssertEqual(q.firstPaceSec, 5); XCTAssertEqual(q.currentSec, 60); XCTAssertEqual(q.jitterPct, 50)
+        XCTAssertEqual(q.dwellSec, 300); XCTAssertEqual(q.persistPasses, 3); XCTAssertEqual(q.retryCapSec, 600)
+        let clamped = AutoPolicy.parse("pace=0,cur=9999,jitter=99,dwell=-5,persist=0,cap=1")
+        XCTAssertEqual(clamped.firstPaceSec, 1); XCTAssertEqual(clamped.currentSec, 300); XCTAssertEqual(clamped.jitterPct, 50)
+        XCTAssertEqual(clamped.dwellSec, 0); XCTAssertEqual(clamped.persistPasses, 1); XCTAssertEqual(clamped.retryCapSec, 60)
+        // twice the margin: 15 % and 25 ms become 30 % and 50 ms
+        XCTAssertTrue(d.shouldSwitch(currentMs: 400, bestMs: 270, factor: 2))    // 400 − 120 = 280: 270 is clearly better
+        XCTAssertFalse(d.shouldSwitch(currentMs: 400, bestMs: 290, factor: 2))
+        XCTAssertTrue(d.shouldSwitch(currentMs: 400, bestMs: 290))                // by the plain margin it is
     }
 }

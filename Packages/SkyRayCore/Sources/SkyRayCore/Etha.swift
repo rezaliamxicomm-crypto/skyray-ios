@@ -42,6 +42,15 @@ public enum Etha {
     public static let delayFresh: TimeInterval = 600
     /// Auto (AutoPolicy, AutoEngine): the service's header with the numbers, the balancer's tag in the tunnel's config.
     public static let autoHeader = "x-etha-auto"
+    public static let hintHeader = "x-etha-hint"
+    public static let sigAtHeader = "x-etha-sig-at"
+    /// The box's signing keys (Ed25519, raw public halves, base64): A in use, B the spare the operator holds. The core
+    /// (echfetch/signature.go) verifies every answer against them; one whose signature is missing, forged or made with a
+    /// key not here counts as no answer (SubscriptionImporter). Generated 2026-10-30 (/opt/staging/auto-2.1, keygen).
+    public static let signKeys = ["x1P7PGU48fnmDii+oUqRq2BNEc/JKhldw2oDKIYC9RY=", "nEb0S15kOFA081vRo8SwKijoFZopS5Ot4zrHRoxqT6I="]
+    /// An answer signed longer ago than this is taken only when no fresher one arrives in the race (a hop replaying an old
+    /// answer); one older than the last accepted is never taken.
+    public static let signedStaleAfter: Int64 = 3600
     public static let autoBalancerTag = "auto"
     /// Auto measures every line with two HEAD requests to the box's own probe target (a TEST-NET address Xray on the box
     /// sends to a 204 on loopback: no third party, no TLS); the fallback is tried once when no line answers the target.

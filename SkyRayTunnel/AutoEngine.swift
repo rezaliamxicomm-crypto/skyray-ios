@@ -2,26 +2,35 @@ import Foundation
 import SkyRayCore
 import SkyRayXray
 
-/// SkyRay's Auto in the extension — the same design as the Android service's EthaAuto. The tunnel's Xray holds every
-/// line of the subscription behind one random balancer (XrayConfigBuilder.autoConfig); this holds the balancer to one
-/// line (libXray's balancer override through the API inbound) and measures the lines through that same Xray — a
-/// loopback HTTP inbound per line, two HEAD requests to the box's own probe target down one kept-alive connection,
-/// the smaller time kept. The rules are AutoPolicy's:
+/// SkyRay's Auto in the extension — the same design as the Android service's EthaAuto (2.1). The tunnel's Xray holds
+/// every line of the subscription behind one random balancer (XrayConfigBuilder.autoConfig); this holds the balancer to
+/// one line (libXray's balancer override through the API inbound) and measures the lines through that same Xray — a
+/// loopback HTTP inbound per line, two HEAD requests to the box's own probe target down one kept-alive connection, the
+/// smaller time kept. The rules are the pure objects': AutoSchedule (when), AutoDecision (whether to move), LineHealth
+/// (what is known of each line on this network), AutoPolicy (the numbers), Hint (the box's advice):
 ///
-///   - at start every line is measured at once and new connections move to the best when the line in use failed or is
-///     beaten by the margin; a change of line cuts nothing that is open;
-///   - a settling round settleSec after the connect race (the race reads high on a core a second old); while the
-///     tunnel is in use (traffic within idleSec) every line is measured again roundSec after the last measurement
-///     ended, give or take the jitter, a failed line only after failedRetrySec; idle, nothing runs, and traffic
-///     returning brings a round at once; a network change is one normal round 15 s later — AutoSchedule is the one
-///     clock for all of it; the box's probe target, and the fallback for one round at a time only;
-///   - a stall — bytes out, none back for stallSec, read from hev's counters every tick — probes the line in use at
-///     once, and a failed probe moves to the best of the rest, measured anew;
-///   - no line answers: the Searching state (TunnelState.searching) — every line again every searchSec, in use or
-///     not; the app, seeing the state, fetches the subscription again for lines the box may have replaced;
-///   - the line in use's time lands in the App Group as it is measured (TunnelState.latencyMs: the app's chip), every
-///     round's results as the report the next fetch carries to the box (TunnelState.lineReport, the header
-///     X-Etha-Lines); a move is reported to the provider, which tells the app.
+///   - no bursts: after Connect the line in use is probed first (its number on the chip within a second), then the
+///     first pass — every other line, two at a time, a step a second, best-known first (this network's memory, else the
+///     box's hint, else the subscription's order); then the steady trickle, one probe per roundSec/N, give or take the
+///     jitter, only while the radio is warm (bytes moved within warmSec) or the app is on screen (status requests);
+///     the line in use every currentSec while on screen; a pass ended is a decision and a report;
+///   - moves (AutoDecision): the first pass corrects a cold pick once, for a line clearly better; steady state moves only
+///     for a lead that persists over two pass ends (or is twice the margin), never within the dwell; a manual test by
+///     the margin alone. A change of line moves new connections only and cuts nothing that is open;
+///   - failover, make-before-break: a stall (bytes out, none back for stallSec) or a failed probe of the line in use
+///     probes the line in use and the best-known alternative together within failoverMs; the line in use answering
+///     means nothing happens; it failing and the alternative answering moves at once; the alternative failing too tries
+///     the next best once; then Searching. The app is asked for one quiet fetch after a failover (TunnelState.failoverAt);
+///   - a failed line backs off (15 → 30 → 60 → 120 min) and the memory of the network is kept across sessions
+///     (SkyRayStore.lineHealth); a network change forgives every line and restarts the first pass in 15 s; idle, nothing
+///     runs, and traffic returning probes the line in use at once;
+///   - Searching (no line answers): the fast trickle over every line, retries ignored, until one answers; the app, seeing
+///     the state, fetches the subscription again; the hint's outage flag changes the text ("it is not you");
+///   - the box's probe target, the fallback only while the target answers nobody (one probe of the line in use against
+///     the fallback decides, the first probe of every pass is a scout back);
+///   - what is measured goes to the App Group as it lands (the chip), every pass as the report the next fetch carries to
+///     the box (TunnelState.lineReport, the header X-Etha-Lines) with the best five-second download rate seen on the
+///     line in use during the pass — the passive throughput figure the box's ranking folds in.
 ///
 /// Nobody picks a line by hand any more (2.0.0): the customer sees no line name, only the latency.
 /// All state lives on the provider's queue; the measurements themselves run off it and come back to it.
@@ -31,6 +40,7 @@ final class AutoEngine {
         let remark: String
         let order: Int
         let probePort: Int
+        var label: String { LineReport.label(remark) ?? remark }
     }
 
     private let queue: DispatchQueue
@@ -45,33 +55,60 @@ final class AutoEngine {
 
     private(set) var current: String
     private var results: [String: Int64] = [:]
-    private var schedule = AutoSchedule()           // the one clock: the next round, the settling round, the retries, the target
+    private var schedule = AutoSchedule()
+    private var decision = AutoDecision()
+    private var health: LineHealth
+    private var network: String
+    private var hint: Hint?
     private var samples: [AutoPolicy.Sample] = []
-    private var lastTrafficAt = Date()
+    private var rateSamples: [(at: Double, down: Int64)] = []
+    private var passRateKbps: Int64 = 0
+    private var lastTrafficAt: Double
     private var wasInUse = true
-    private var lastStallProbeAt = Date.distantPast
+    private var lastStallProbeAt: Double = -1_000
+    private var watchedAt: Double = -1_000
     private var timer: DispatchSourceTimer?
     private var measuring = false
     private var paused = false
     private var stopped = false
     private(set) var searching = false
+    private var movedInPass = false
 
-    private static let tick: TimeInterval = 4
-    private static let samplesKept = 16
-    private static let stallProbeGap: TimeInterval = 20
-    private static let networkSettle: TimeInterval = 15
-    /// the first race measures every line at once, within what the extension's memory allows
-    private static let raceConcurrency = 16
+    private static let tick: TimeInterval = 1
+    private static let samplesKept = 32
+    private static let stallProbeGap: Double = 10
+    private static let networkSettle: Double = 15
+    private static let watchedFor: Double = 15
+    private static let rateWindow: Double = 5
+    private static let rateMinBytes: Int64 = 256 * 1024
+    /// a manual test measures every line at once, within what the extension's memory allows
+    private static let manualConcurrency = 16
 
     init(queue: DispatchQueue, store: SkyRayStore, log: RingLog, lines: [Line], policy: AutoPolicy, apiPort: Int, current: String,
-         traffic: @escaping () -> (up: Int64, down: Int64), onSwitch: @escaping (Line, String) -> Void) {
+         network: String, hint: Hint?, traffic: @escaping () -> (up: Int64, down: Int64), onSwitch: @escaping (Line, String) -> Void) {
         self.queue = queue; self.store = store; self.log = log; self.lines = lines; self.policy = policy; self.apiPort = apiPort
         self.current = current; self.traffic = traffic; self.onSwitch = onSwitch
+        self.network = network; self.hint = hint
+        self.health = store.lineHealth(on: network)
+        self.lastTrafficAt = AutoEngine.mono()
     }
 
+    static func mono() -> Double { ProcessInfo.processInfo.systemUptime }
+    private static func wall() -> TimeInterval { Date().timeIntervalSince1970 }
+
+    // MARK: the provider's calls
+
     func start() {
-        log.info("auto: \(lines.count) lines behind the balancer, starting on \(name(current)); round \(policy.roundSec) s ±\(policy.jitterPct) %, settle \(policy.settleSec) s, failed \(policy.failedRetrySec) s, idle \(policy.idleSec) s, search \(policy.searchSec) s, margin \(policy.marginPct) % / \(policy.floorMs) ms, stall \(policy.stallSec) s")
-        race(reason: "connect") { _ in }
+        let labels = lines.map { $0.label }
+        // the start line: the best this network is known to have, else the hint's first, else what the provider chose
+        if health.lastMs(label(current)) == nil {
+            let best = health.bestKnown(labels) ?? hint?.arrange(labels).first { !(hint?.dead.contains($0) ?? false) }
+            if let b = best, let line = lines.first(where: { $0.label == b }), line.id != current {
+                switchTo(id: line.id, reason: health.bestKnown(labels) != nil ? "known best on \(network)" : "the box's advice")
+            }
+        }
+        schedule.start(now: AutoEngine.mono(), order: order())
+        log.info("auto: \(lines.count) lines behind the balancer, on \(name(current)); network \(network), \(health.entries.count) lines remembered\(hint.map { ", the box advises \($0.order.count) (\($0.dead.count) dead\($0.outage ? ", outage" : ""))" } ?? ""); a pass every \(policy.roundSec) s, the first at \(policy.firstPaceSec) s a step")
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + AutoEngine.tick, repeating: AutoEngine.tick)
         t.setEventHandler { [weak self] in self?.tickNow() }
@@ -82,180 +119,267 @@ final class AutoEngine {
     func stop() {
         stopped = true
         timer?.cancel(); timer = nil
+        store.saveLineHealth(health, on: network)
     }
 
     func pause() { paused = true }
 
-    func resume() { paused = false; samples.removeAll() }
+    func resume() { paused = false; samples.removeAll(); rateSamples.removeAll() }
 
-    /// Wi-Fi ↔ mobile (or the path back after a gap): what was measured no longer holds. One normal round 15 s from
-    /// now, every line, in use or not — not a race of every line at once — and a second event within a minute is the
-    /// same event (AutoSchedule.networkChanged).
-    func onNetworkChanged() {
-        samples.removeAll()
-        schedule.networkChanged(now: Date(), settle: AutoEngine.networkSettle)
-        log.info("auto: the network changed; every line measured again in \(Int(AutoEngine.networkSettle)) s")
-    }
+    /// The app asked for the status: its chip is on screen, the line in use is kept fresh for it.
+    func noteWatched() { watchedAt = AutoEngine.mono() }
 
-    /// The settling round (AutoSchedule.settleAt): every line with the normal concurrency, settleSec after the connect
-    /// race — the race measured every line at once on a core a second old and read high.
-    private func settleRound() {
-        log.info("auto: the settling round")
-        measure(lines, concurrency: policy.concurrency) { [weak self] out in
-            guard let self = self else { return }
-            let moved = self.decide(reason: "settle")
-            self.report(trigger: "settle", switched: moved)
-            self.updateSearching()
-            self.schedule.roundDone(now: Date(), results: out, policy: self.policy, draw: Double.random(in: 0..<1), searching: self.searching)
+    /// Wi-Fi ↔ mobile (or the path back after a gap): what was measured no longer holds. The memory of the new network
+    /// takes over, every line is forgiven, the first pass restarts in 15 s; a second event within a minute is the same.
+    func onNetworkChanged(signature: String) {
+        if signature != network {
+            store.saveLineHealth(health, on: network)
+            network = signature
+            health = store.lineHealth(on: network)
+        }
+        health.forgive()
+        samples.removeAll(); rateSamples.removeAll()
+        decision.firstSwitchDone = false
+        let now = AutoEngine.mono()
+        let before = schedule.lastNetworkAt
+        schedule.networkChanged(now: now, settle: AutoEngine.networkSettle)
+        if schedule.lastNetworkAt != before {
+            schedule.order = order()
+            log.info("auto: the network changed (\(network)); the first pass runs again from \(Int(AutoEngine.networkSettle)) s on")
         }
     }
 
-    /// The customer pressed Test latency: every line measured now, the decision made, the outcome said —
-    /// "switched", "kept" or "none" (no line answers) — on the queue.
+    /// The customer pressed Test latency: every line measured now, the decision made by the margin alone, the outcome
+    /// said — "switched", "kept" or "none" (no line answers) — on the queue; the trickle re-seeded best-first after it.
     func pingAll(completion: @escaping (String) -> Void) {
-        race(reason: "manual", completion: completion)
-    }
-
-    /// New connections take the line now; what is open stays where it is.
-    @discardableResult
-    private func switchTo(id: String, reason: String) -> Bool {
-        guard let line = lines.first(where: { $0.id == id }) else { return false }
-        do {
-            try LibXrayBridge.balancerOverride(api: "127.0.0.1:\(apiPort)", balancer: Etha.autoBalancerTag, target: XrayConfigBuilder.lineTag(id))
-        } catch {
-            log.error("auto: the balancer refused \(line.remark): \(error)")
-            return false
+        if measuring {
+            queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.pingAll(completion: completion) }
+            return
         }
-        current = id
-        log.info("auto: new connections take \(line.remark) (\(reason))")
-        onSwitch(line, reason)
-        tellLatency()
-        return true
+        measuring = true
+        measureSet(lines, concurrency: min(lines.count, AutoEngine.manualConcurrency), timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+            guard let self = self else { completion("none"); return }
+            let moved = self.decide(.manual, reason: "manual")
+            self.report(trigger: "manual", switched: moved)
+            self.updateSearching()
+            if !self.searching { self.schedule.reseed(now: AutoEngine.mono(), order: self.order(), policy: self.policy, draw: Double.random(in: 0..<1)) }
+            self.movedInPass = false
+            self.measuring = false
+            self.store.saveLineHealth(self.health, on: self.network)
+            let answered = self.lines.contains { (self.results[$0.id] ?? 0) > 0 }
+            completion(!answered ? "none" : (moved ? "switched" : "kept"))
+        }
     }
 
     // MARK: the loop
 
     private func tickNow() {
         guard !paused, !stopped else { return }
-        let now = Date()
+        let now = AutoEngine.mono()
         sample(now)
-        if !measuring, !searching, policy.stalled(samples, now: now), now.timeIntervalSince(lastStallProbeAt) >= AutoEngine.stallProbeGap {
+        guard !measuring else { return }
+        if !searching, policy.stalled(samples, now: Date()), now - lastStallProbeAt >= AutoEngine.stallProbeGap {
             lastStallProbeAt = now
-            stallProbe()
+            log.warn("auto: bytes out and none back for \(policy.stallSec) s on \(name(current))")
+            failover(reason: "stall")
             return
         }
-        guard !measuring else { return }
-        let inUse = now.timeIntervalSince(lastTrafficAt) < TimeInterval(policy.idleSec)
+        let warm = now - lastTrafficAt < Double(policy.warmSec)
+        let inUse = now - lastTrafficAt < Double(policy.idleSec)
         if inUse, !wasInUse { schedule.wake(now: now); log.info("auto: traffic is back after the idle gap; measuring now") }
         wasInUse = inUse
-        switch schedule.action(now: now, inUse: inUse, searching: searching) {
-        case .settle: schedule.settleTaken(); settleRound()
-        case .round: round()
-        case nil: break
-        }
-    }
-
-    private func sample(_ now: Date) {
-        let t = traffic()
-        if let last = samples.last, t.up != last.up || t.down != last.down { lastTrafficAt = now }
-        samples.append(AutoPolicy.Sample(at: now, up: t.up, down: t.down))
-        if samples.count > AutoEngine.samplesKept { samples.removeFirst(samples.count - AutoEngine.samplesKept) }
-    }
-
-    /// The line in use looks dead: one probe of it; failed, the rest measured anew and the best takes over.
-    private func stallProbe() {
-        guard let line = lines.first(where: { $0.id == current }) else { return }
-        measure([line], concurrency: 1) { [weak self] r in
-            guard let self = self else { return }
-            self.tellLatency()
-            if (r[line.id] ?? -1) > 0 { return }
-            self.log.warn("auto: \(line.remark) did not answer after a stall")
-            let rest = self.lines.filter { $0.id != self.current }
-            self.measure(rest, concurrency: min(rest.count, AutoEngine.raceConcurrency)) { [weak self] out in
-                guard let self = self else { return }
-                let moved = self.decide(reason: "stall")
-                self.report(trigger: "stall", switched: moved)
-                self.updateSearching()
-                self.schedule.roundDone(now: Date(), results: out, policy: self.policy, draw: Double.random(in: 0..<1), searching: self.searching)
+        let watched = now - watchedAt < AutoEngine.watchedFor
+        let wall = AutoEngine.wall()
+        let action = schedule.action(now: now, warm: warm, watched: watched, searching: searching, current: current,
+                                     due: { id in self.health.due(self.label(id), now: wall) })
+        switch action {
+        case .probe(let ids)?:
+            searching ? searchStep(ids) : probeLines(ids)
+        case .probeCurrent?:
+            probeCurrentLine()
+        case nil:
+            // a step whose time has come with nothing to probe (every other line waits its retry): spent
+            if !searching, let n = schedule.nextProbeAt, now >= n, warm || watched || schedule.forced || schedule.phase == .first {
+                schedule.nothingDue(now: now, policy: policy, draw: Double.random(in: 0..<1))
             }
         }
     }
 
-    private func round() {
-        let now = Date()
-        let ids = Set(schedule.linesForRound(now: now, lines: lines.map { $0.id }, searching: searching))
-        let due = lines.filter { ids.contains($0.id) }
-        if due.isEmpty {   // every line failed and waits its retry: the clock moves on, nothing is measured
-            schedule.roundDone(now: now, results: [:], policy: policy, draw: Double.random(in: 0..<1), searching: searching)
-            return
-        }
-        let trigger = schedule.forced ? "network" : "auto"
-        measure(due, concurrency: policy.concurrency) { [weak self] out in
-            guard let self = self else { return }
-            let moved = self.decide(reason: trigger)
-            self.report(trigger: trigger, switched: moved)
-            self.updateSearching()
-            self.schedule.roundDone(now: Date(), results: out, policy: self.policy, draw: Double.random(in: 0..<1), searching: self.searching)
-        }
-    }
-
-    private func race(reason: String, completion: @escaping (String) -> Void) {
-        measure(lines, concurrency: min(lines.count, AutoEngine.raceConcurrency)) { [weak self] out in
-            guard let self = self else { completion("none"); return }
-            let moved = self.decide(reason: reason)
-            self.report(trigger: reason, switched: moved)
-            self.updateSearching()
-            // a manual test's numbers are warm: no settling round after it
-            self.schedule.raceDone(now: Date(), results: out, policy: self.policy, draw: Double.random(in: 0..<1), searching: self.searching, settle: reason == "connect")
-            let answered = self.lines.contains { (self.results[$0.id] ?? 0) > 0 }
-            completion(!answered ? "none" : (moved ? "switched" : "kept"))
+    /// The counters every tick: traffic (the idle and warm clocks, the stall detector) and the download rate window.
+    private func sample(_ now: Double) {
+        let t = traffic()
+        if let last = samples.last, t.up != last.up || t.down != last.down { lastTrafficAt = now }
+        samples.append(AutoPolicy.Sample(at: Date(), up: t.up, down: t.down))
+        if samples.count > AutoEngine.samplesKept { samples.removeFirst(samples.count - AutoEngine.samplesKept) }
+        rateSamples.append((at: now, down: t.down))
+        rateSamples.removeAll { now - $0.at > AutoEngine.rateWindow + AutoEngine.tick }
+        if let base = rateSamples.first(where: { now - $0.at >= AutoEngine.rateWindow }) ?? rateSamples.first, now - base.at >= AutoEngine.rateWindow - 0.5 {
+            let bytes = t.down - base.down
+            if bytes >= AutoEngine.rateMinBytes {
+                let kbps = Int64(Double(bytes) * 8 / (now - base.at) / 1000)
+                passRateKbps = max(passRateKbps, kbps)
+            }
         }
     }
 
-    /// The lines measured off the queue, at most concurrency at once (a request that arrives while one runs waits its
-    /// turn); the results, the App Group and the completion come back on the queue. The target: the box's own, and
-    /// the fallback only for a round in which a full set got no answer from it at all — never for longer: a round on the
-    /// fallback starts with one probe of the target and comes back to it the moment it answers (AutoSchedule.nextFallback).
-    private func measure(_ which: [Line], concurrency: Int, completion: @escaping ([String: Int64]) -> Void) {
-        if which.isEmpty || stopped { completion([:]); return }
-        if measuring {
-            queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.measure(which, concurrency: concurrency, completion: completion) }
-            return
-        }
+    // MARK: the trickle
+
+    /// The lines in the order the trickle takes them: this network's memory first (known good by time, unseen, failed),
+    /// the box's advice where the memory is empty, else the subscription's order; by id.
+    private func order() -> [String] {
+        let labels = lines.map { $0.label }
+        var arranged = health.bestFirst(labels)
+        if health.entries.isEmpty, let h = hint { arranged = h.arrange(labels) }
+        return arranged.compactMap { l in lines.first { $0.label == l }?.id }
+    }
+
+    private func label(_ id: String) -> String { lines.first { $0.id == id }?.label ?? id }
+    private func name(_ id: String) -> String { lines.first { $0.id == id }?.remark ?? id }
+    private func line(_ id: String) -> Line? { lines.first { $0.id == id } }
+
+    /// One step of the trickle (one line; two in the first pass): measured, recorded; the first pass may correct the
+    /// start once; a wrapped rotation is a pass — the steady decision and the report.
+    private func probeLines(_ ids: [String]) {
+        let which = ids.compactMap { line($0) }
+        guard !which.isEmpty else { return }
+        let scout = schedule.fallback && schedule.cursor == 0   // the first probe of a pass on the fallback tries the target
+        let url = schedule.fallback && !scout ? Etha.probeFallbackURL : Etha.probeURL
         measuring = true
-        let started = Date()
-        let full = which.count == lines.count
+        measureOnce(which, concurrency: which.count, url: url, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+            guard let self = self else { return }
+            if scout {
+                let back = out.values.contains { $0 > 0 }
+                self.schedule.fallback = AutoSchedule.nextFallback(current: true, targetAnswered: back, fallbackAnswered: false)
+                if back { self.log.info("auto: the probe target answers again; measuring against it") }
+            }
+            self.record(out, which: which)
+            let now = AutoEngine.mono()
+            let first = self.schedule.phase == .first
+            let passEnd = self.schedule.probed(now: now, count: which.count, policy: self.policy, draw: Double.random(in: 0..<1))
+            if first, self.decide(.first, reason: "first pass") { self.movedInPass = true }
+            if passEnd {
+                if !first, self.decide(.passEnd, reason: "pass end") { self.movedInPass = true }
+                self.report(trigger: first ? "first" : "auto", switched: self.movedInPass)
+                self.movedInPass = false
+                self.passRateKbps = 0
+                self.store.saveLineHealth(self.health, on: self.network)
+            }
+            self.updateSearching()
+            self.measuring = false
+        }
+    }
+
+    /// The line in use's own probe (every currentSec while the app is on screen, and when traffic returns): its number
+    /// to the chip; failed, the failover.
+    private func probeCurrentLine() {
+        guard let l = line(current) else { return }
+        measuring = true
+        measureOnce([l], concurrency: 1, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+            guard let self = self else { return }
+            self.record(out, which: [l])
+            self.schedule.currentProbed(now: AutoEngine.mono(), policy: self.policy)
+            self.measuring = false
+            if (out[l.id] ?? -1) < 0 {
+                self.log.warn("auto: \(l.remark) did not answer its probe")
+                self.failover(reason: "probe")
+            }
+        }
+    }
+
+    /// Make-before-break: the line in use and the best-known alternative probed together within failoverMs. The line in
+    /// use answering: nothing moves (a false alarm costs this one probe). It failing and the alternative answering: new
+    /// connections move at once. The alternative failing too: the next best, once more; nothing: Searching decides.
+    private func failover(reason: String, attempt: Int = 1) {
+        guard let cur = line(current), !measuring else { return }
+        let labels = lines.map { $0.label }
+        let altLabel = health.bestKnown(labels, except: label(current))
+            ?? hint?.arrange(labels).first { $0 != label(current) && !(hint?.dead.contains($0) ?? false) }
+            ?? labels.first { $0 != label(current) }
+        let alt = altLabel.flatMap { l in lines.first { $0.label == l } }
+        var which = [cur]
+        if let a = alt { which.append(a) }
+        measuring = true
+        measureOnce(which, concurrency: which.count, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.failoverMs) { [weak self] out in
+            guard let self = self else { return }
+            self.record(out, which: which)
+            self.measuring = false
+            if (out[cur.id] ?? -1) > 0 {
+                self.log.info("auto: \(cur.remark) answers within \(self.policy.failoverMs) ms (\(reason)): staying")
+                return
+            }
+            if let a = alt, (out[a.id] ?? -1) > 0 {
+                self.switchTo(id: a.id, reason: "failover after \(reason)")
+                self.decision.moved(now: AutoEngine.mono())
+                self.report(trigger: "failover", switched: true)
+                self.store.updateTunnelState { $0.failoverAt = Date() }
+                self.store.saveLineHealth(self.health, on: self.network)
+                return
+            }
+            if attempt < 2, alt != nil {
+                self.failover(reason: reason, attempt: attempt + 1)
+                return
+            }
+            self.updateSearching()
+        }
+    }
+
+    /// Searching: a step of the fast trickle (two lines, a second a step, every line in turn). The first to answer takes
+    /// new connections; leaving the state re-seeds the trickle.
+    private func searchStep(_ ids: [String]) {
+        let which = ids.compactMap { line($0) }
+        guard !which.isEmpty else { return }
+        measuring = true
+        measureOnce(which, concurrency: which.count, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+            guard let self = self else { return }
+            self.record(out, which: which)
+            self.schedule.searchStep(now: AutoEngine.mono(), count: which.count)
+            if let found = which.first(where: { (out[$0.id] ?? -1) > 0 }), found.id != self.current {
+                self.switchTo(id: found.id, reason: "a line answers again")
+                self.decision.moved(now: AutoEngine.mono())
+            }
+            self.measuring = false
+            self.updateSearching()
+        }
+    }
+
+    // MARK: measuring
+
+    /// A set of lines at once (a manual test): the box's target; nothing from it on any line and something from the
+    /// fallback moves the probes to the fallback until the target answers again.
+    private func measureSet(_ which: [Line], concurrency: Int, timeoutMs: Int, completion: @escaping ([String: Int64]) -> Void) {
+        if which.isEmpty || stopped { completion([:]); return }
         if schedule.fallback {
             let scout = which.first { $0.id == current } ?? which[0]
-            measureOnce([scout], concurrency: 1, url: Etha.probeURL) { [weak self] one in
+            measureOnce([scout], concurrency: 1, url: Etha.probeURL, timeoutMs: timeoutMs) { [weak self] one in
                 guard let self = self else { return }
                 let back = (one[scout.id] ?? -1) > 0
-                self.schedule.fallback = AutoSchedule.nextFallback(current: true, fullSet: full, targetAnswered: back, fallbackAnswered: false)
+                self.schedule.fallback = AutoSchedule.nextFallback(current: true, targetAnswered: back, fallbackAnswered: false)
                 if back { self.log.info("auto: the probe target answers again; measuring against it") }
-                self.measureOnce(which, concurrency: concurrency, url: back ? Etha.probeURL : Etha.probeFallbackURL) { [weak self] out in
-                    self?.finish(which, out, started: started, completion: completion)
+                self.measureOnce(which, concurrency: concurrency, url: back ? Etha.probeURL : Etha.probeFallbackURL, timeoutMs: timeoutMs) { [weak self] out in
+                    guard let self = self else { return }
+                    self.record(out, which: which); completion(out)
                 }
             }
             return
         }
-        measureOnce(which, concurrency: concurrency, url: Etha.probeURL) { [weak self] first in
+        measureOnce(which, concurrency: concurrency, url: Etha.probeURL, timeoutMs: timeoutMs) { [weak self] first in
             guard let self = self else { return }
-            if full, !first.isEmpty, first.values.allSatisfy({ $0 < 0 }) {
-                self.measureOnce(which, concurrency: concurrency, url: Etha.probeFallbackURL) { [weak self] again in
+            if which.count == self.lines.count, !first.isEmpty, first.values.allSatisfy({ $0 < 0 }) {
+                self.measureOnce(which, concurrency: concurrency, url: Etha.probeFallbackURL, timeoutMs: timeoutMs) { [weak self] again in
                     guard let self = self else { return }
                     let answered = again.values.contains { $0 > 0 }
-                    self.schedule.fallback = AutoSchedule.nextFallback(current: false, fullSet: true, targetAnswered: false, fallbackAnswered: answered)
-                    if answered { self.log.warn("auto: the probe target gave no answer on any line; this round measured against the fallback, the target is tried again next round") }
-                    self.finish(which, answered ? again : first, started: started, completion: completion)
+                    self.schedule.fallback = AutoSchedule.nextFallback(current: false, targetAnswered: false, fallbackAnswered: answered)
+                    if answered { self.log.warn("auto: the probe target gave no answer on any line; measuring against the fallback until it answers again") }
+                    let out = answered ? again : first
+                    self.record(out, which: which); completion(out)
                 }
                 return
             }
-            self.finish(which, first, started: started, completion: completion)
+            self.record(first, which: which); completion(first)
         }
     }
 
-    private func measureOnce(_ which: [Line], concurrency: Int, url: String, completion: @escaping ([String: Int64]) -> Void) {
-        let timeout = policy.probeTimeoutSec
+    private func measureOnce(_ which: [Line], concurrency: Int, url: String, timeoutMs: Int, completion: @escaping ([String: Int64]) -> Void) {
         let slots = DispatchSemaphore(value: max(1, concurrency))
         let group = DispatchGroup()
         let lock = NSLock()
@@ -264,7 +388,7 @@ final class AutoEngine {
             group.enter()
             measureQueue.async {
                 slots.wait()
-                let probe = Probe(port: line.probePort, timeoutSeconds: timeout)
+                let probe = Probe(port: line.probePort, timeoutMs: timeoutMs)
                 let ms = probe.measureLine(url: url)
                 probe.invalidate()
                 slots.signal()
@@ -275,22 +399,49 @@ final class AutoEngine {
         group.notify(queue: queue) { completion(out) }
     }
 
-    private func finish(_ which: [Line], _ out: [String: Int64], started: Date, completion: @escaping ([String: Int64]) -> Void) {
-        let now = Date()
-        for (id, ms) in out { results[id] = ms }
+    /// Results into the engine, the memory of the network and the App Group; the line in use's number to the chip.
+    private func record(_ out: [String: Int64], which: [Line]) {
+        let wall = AutoEngine.wall()
+        for (id, ms) in out {
+            results[id] = ms
+            if ms > 0 { health.ok(label(id), ms: ms, now: wall) } else { health.failed(label(id), now: wall, policy: policy) }
+        }
         let snapshot = results
-        store.updateTunnelState { $0.results = snapshot; $0.lastRoundAt = now }
-        let summary = which.sorted { $0.order < $1.order }
-            .map { l in "\(l.remark)=\(out[l.id].map { $0 > 0 ? "\($0)ms" : "failed" } ?? "?")" }.joined(separator: ", ")
-        log.info("auto: measured \(out.count) lines in \(Int(now.timeIntervalSince(started) * 1000)) ms after: \(summary)")
+        store.updateTunnelState { $0.results = snapshot; $0.lastRoundAt = Date() }
+        if which.count > 1 {
+            let summary = which.sorted { $0.order < $1.order }
+                .map { l in "\(l.remark)=\(out[l.id].map { $0 > 0 ? "\($0)ms" : "failed" } ?? "?")" }.joined(separator: ", ")
+            log.info("auto: measured \(out.count) lines: \(summary)")
+        } else if let l = which.first {
+            log.info("auto: \(l.remark) \(out[l.id].map { $0 > 0 ? "\($0) ms" : "failed" } ?? "?")")
+        }
         if which.contains(where: { $0.id == current }) { tellLatency() }
-        measuring = false
-        completion(out)
     }
 
-    private func decide(reason: String) -> Bool {
-        let candidates = lines.map { AutoSelect.Candidate(id: $0.id, delayMs: results[$0.id] ?? 0, order: $0.order) }
-        guard let target = policy.target(current: current, candidates: candidates, pinned: false) else { return false }
+    // MARK: deciding
+
+    /// New connections take the line now; what is open stays where it is.
+    @discardableResult
+    private func switchTo(id: String, reason: String) -> Bool {
+        guard let l = line(id) else { return false }
+        do {
+            try LibXrayBridge.balancerOverride(api: "127.0.0.1:\(apiPort)", balancer: Etha.autoBalancerTag, target: XrayConfigBuilder.lineTag(id))
+        } catch {
+            log.error("auto: the balancer refused \(l.remark): \(error)")
+            return false
+        }
+        current = id
+        passRateKbps = 0
+        log.info("auto: new connections take \(l.remark) (\(reason))")
+        onSwitch(l, reason)
+        tellLatency()
+        return true
+    }
+
+    private func decide(_ phase: AutoDecision.Phase, reason: String) -> Bool {
+        let candidates = lines.map { AutoDecision.Candidate(id: $0.id, ms: results[$0.id] ?? 0, order: $0.order) }
+        guard let cur = candidates.first(where: { $0.id == current }) else { return false }
+        guard let target = decision.target(now: AutoEngine.mono(), phase: phase, current: cur, candidates: candidates, policy: policy) else { return false }
         return switchTo(id: target, reason: reason)
     }
 
@@ -300,22 +451,52 @@ final class AutoEngine {
         store.updateTunnelState { $0.latencyMs = ms; $0.latencyAt = Date() }
     }
 
-    /// What this round measured, kept for the next fetch (the header X-Etha-Lines).
+    /// What was measured, kept for the next fetch (the header X-Etha-Lines), with the pass's best download rate.
     private func report(trigger: String, switched: Bool) {
-        let inUse = lines.first { $0.id == current }?.remark
+        let inUse = line(current)?.remark
         let header = LineReport.build(now: Date(), trigger: trigger, inUseRemark: inUse, switched: switched,
-                                      results: lines.map { ($0.remark, results[$0.id] ?? 0) })
+                                      results: lines.map { ($0.remark, results[$0.id] ?? 0) }, rateKbps: passRateKbps)
         if let h = header { store.updateTunnelState { $0.lineReport = h } }
     }
 
-    /// Searching = every line measured and none answering; the App Group carries it to the app.
+    /// Searching = every line measured and none answering. Before entering it the line in use is probed against the
+    /// fallback once: an answer there means the target is down, not the lines, and the probes move to the fallback.
+    /// Entering turns the clock to the fast trickle; leaving re-seeds it and reports.
     private func updateSearching() {
-        let dead = lines.allSatisfy { (results[$0.id] ?? 0) < 0 }
-        if dead == searching { return }
-        searching = dead
-        log.info(dead ? "auto: no line answers — searching" : "auto: a line answers again")
-        store.updateTunnelState { $0.searching = dead }
+        let dead = !lines.isEmpty && lines.allSatisfy { (results[$0.id] ?? 0) < 0 }
+        if dead, !searching, !schedule.fallback, !measuring, let cur = line(current) {
+            measuring = true
+            measureOnce([cur], concurrency: 1, url: Etha.probeFallbackURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+                guard let self = self else { return }
+                self.measuring = false
+                if (out[cur.id] ?? -1) > 0 {
+                    self.schedule.fallback = true
+                    self.results[cur.id] = out[cur.id]
+                    self.health.ok(self.label(cur.id), ms: out[cur.id]!, now: AutoEngine.wall())
+                    self.tellLatency()
+                    self.log.warn("auto: the probe target gave no answer on any line but the fallback answers on \(cur.remark): measuring against the fallback until the target answers again")
+                } else {
+                    self.enterSearching(true)
+                }
+            }
+            return
+        }
+        if dead != searching { enterSearching(dead) }
     }
 
-    private func name(_ id: String) -> String { lines.first { $0.id == id }?.remark ?? id }
+    private func enterSearching(_ on: Bool) {
+        searching = on
+        let outage = on && (hint?.outage ?? false)
+        log.info(on ? "auto: no line answers — searching\(outage ? " (the box says this network blocks every line right now)" : "")" : "auto: a line answers again")
+        store.updateTunnelState { $0.searching = on; $0.outage = outage }
+        let now = AutoEngine.mono()
+        if on {
+            schedule.searchingBegan(now: now)
+            report(trigger: "search", switched: false)
+        } else {
+            schedule.reseed(now: now, order: order(), policy: policy, draw: Double.random(in: 0..<1))
+            report(trigger: "search", switched: true)
+        }
+        store.saveLineHealth(health, on: network)
+    }
 }

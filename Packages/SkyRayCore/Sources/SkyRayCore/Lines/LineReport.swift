@@ -4,7 +4,10 @@ import Foundation
 /// row of line_reports; the panel shows it — the customer sees no line name). The same shape as the Android app's
 /// EthaReport:
 ///
-///     v=1;t=<epoch s>;trig=<connect|auto|stall|manual|network>;use=<label>;sw=<0|1>;l=<label>:<ms>,<label>:-1,…
+///     v=1;t=<epoch s>;trig=<connect|first|auto|failover|manual|network|search>;use=<label>;sw=<0|1>;r=<kbps>;l=<label>:<ms>,<label>:-1,…
+///
+/// `r` (2.1): the best five-second download rate seen on the line in use during the pass, in kbps, when any (the passive
+/// throughput figure for the box's ranking; a latency probe cannot see a slow line).
 ///
 /// A label is the line's name without its "EthaVPN-" prefix (REALITY-relay-FRA9-443, XHTTP-api-CleanIP1-443); a line
 /// named otherwise is left out. ms -1 = no answer. The header stays under 4 KB (at most 64 lines).
@@ -23,7 +26,7 @@ public enum LineReport {
 
     /// The header. `results`: (remark, ms) in the subscription's order, -1 failed, 0 not measured (left out); nil when
     /// nothing measured was one of our lines.
-    public static func build(now: Date, trigger: String, inUseRemark: String?, switched: Bool, results: [(String, Int64)]) -> String? {
+    public static func build(now: Date, trigger: String, inUseRemark: String?, switched: Bool, results: [(String, Int64)], rateKbps: Int64 = 0) -> String? {
         var items: [String] = []
         for (remark, ms) in results {
             guard let l = label(remark), ms != 0 else { continue }
@@ -32,7 +35,8 @@ public enum LineReport {
         }
         if items.isEmpty { return nil }
         let use = label(inUseRemark) ?? ""
-        return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0);l=\(items.joined(separator: ","))"
+        let rate = rateKbps > 0 ? ";r=\(rateKbps)" : ""
+        return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0)\(rate);l=\(items.joined(separator: ","))"
     }
 
     /// One text for a set of lines: the same set → the same text, whatever their ids (the line's link without its name)

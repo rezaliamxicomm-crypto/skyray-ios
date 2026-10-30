@@ -103,6 +103,12 @@ public enum SubscriptionHeaders {
             if let m = updateIntervalMinutes(raw) { info.updateIntervalMinutes = m }
             seen = true
         }
+        if let raw = headers[Etha.hintHeader] {
+            info.hint = Hint.parse(raw) == nil ? nil : raw.trimmingCharacters(in: .whitespaces); seen = true   // a header that is no hint clears the old one
+        } else {
+            info.hint = nil                                                                                // no hint this fetch: none kept
+        }
+        if let raw = headers[Etha.sigAtHeader], let at = Int64(raw.trimmingCharacters(in: .whitespaces)), at > 0 { info.signedAt = at }
         if let raw = headers[Etha.autoHeader] {
             let t = raw.trimmingCharacters(in: .whitespaces); info.autoPolicy = t.isEmpty ? nil : t; seen = true
         }

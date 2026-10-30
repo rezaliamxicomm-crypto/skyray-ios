@@ -2215,6 +2215,29 @@
           }
         }
       }
+    },
+    "lines.blocked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lines are blocked on this network right now. We are working on it."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "خطوط روی این شبکه فعلاً مسدود شده‌اند. در حال رفع آن هستیم."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Линии в этой сети сейчас блокируются. Мы работаем над этим."
+          }
+        }
+      }
     }
   }
 }

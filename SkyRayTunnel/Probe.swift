@@ -12,19 +12,21 @@ import SkyRayCore
 final class Probe {
     let port: Int
     private let session: URLSession
+    private let timeoutMs: Int
 
-    private let timeoutSeconds: Int
+    convenience init(port: Int, timeoutSeconds: Int = 10) { self.init(port: port, timeoutMs: timeoutSeconds * 1000) }
 
-    init(port: Int, timeoutSeconds: Int = 10) {
+    /// `timeoutMs`: the window of one request (the failover probe asks for 1.5 s; the trickle for the policy's seconds).
+    init(port: Int, timeoutMs: Int) {
         self.port = port
-        self.timeoutSeconds = timeoutSeconds
+        self.timeoutMs = max(200, timeoutMs)
         let config = URLSessionConfiguration.ephemeral
         config.connectionProxyDictionary = [
             "HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": port,
             "HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": port
         ]
-        config.timeoutIntervalForRequest = TimeInterval(timeoutSeconds)
-        config.timeoutIntervalForResource = TimeInterval(timeoutSeconds + 2)
+        config.timeoutIntervalForRequest = TimeInterval(self.timeoutMs) / 1000
+        config.timeoutIntervalForResource = TimeInterval(self.timeoutMs) / 1000 + 2
         config.waitsForConnectivity = false
         config.urlCache = nil
         session = URLSession(configuration: config)
@@ -67,7 +69,7 @@ final class Probe {
             answered = ((response as? HTTPURLResponse)?.statusCode ?? 600) < 400
             done.signal()
         }.resume()
-        _ = done.wait(timeout: .now() + .seconds(timeoutSeconds + 3))
+        _ = done.wait(timeout: .now() + .milliseconds(timeoutMs + 3000))
         return answered ? Int64(Date().timeIntervalSince(started) * 1000) : nil
     }
 
@@ -81,7 +83,7 @@ final class Probe {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return -1 }
         defer { close(fd) }
-        var tv = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
+        var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32((timeoutMs % 1000) * 1000))
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         var one: Int32 = 1

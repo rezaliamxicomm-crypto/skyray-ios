@@ -13,6 +13,8 @@ public struct SubscriptionInfo: Codable, Equatable {
     public var updateIntervalMinutes: Int64?
     public var linkHops: String?           // the service's last X-Etha-Link-Hops ("host=ip,…"): where the link hop inside Iran is
     public var autoPolicy: String?         // the service's last X-Etha-Auto: Auto's numbers over AutoPolicy's defaults
+    public var hint: String?               // the service's last X-Etha-Hint: the box's ranking of the lines on this network (Hint), advice for Auto
+    public var signedAt: Int64?            // X-Etha-Sig-At of the last answer: the time the box signed it (the replay rule)
     public var infoUpdated: Date?
     public init() {}
 }
@@ -76,5 +78,7 @@ public struct TunnelState: Codable, Equatable {
     public var latencyMs: Int64?          // the line in use's last time, -1 failed
     public var latencyAt: Date?
     public var lineReport: String?        // what Auto measured last (LineReport), for the next fetch; cleared once sent
+    public var outage: Bool?              // the box says every phone of this network fails on every line (the hint's out=1): "it is not you"
+    public var failoverAt: Date?          // Auto last left a dead line then (the app's quiet fetch follows)
     public init() {}
 }

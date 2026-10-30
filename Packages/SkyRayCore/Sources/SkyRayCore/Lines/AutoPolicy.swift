@@ -4,10 +4,10 @@ import Foundation
 /// line of the subscription behind one balancer; the extension measures the lines through that core (AutoEngine) and
 /// holds the balancer to the best, so a change of line moves new connections only and cuts nothing that is open. The
 /// numbers here are the policy's defaults; the service's header X-Etha-Auto ("round=180,failed=900,idle=600,
-/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600,search=60,sfetch=300,settle=10,jitter=10") replaces any of them on the next
+/// margin=15,floor=25,stall=4,timeout=5,conc=8,fresh=600,search=60,sfetch=300,pace=1,cur=30,jitter=10,dwell=90,persist=2,cap=7200,warm=20,fover=1500") replaces any of them on the next
 /// fetch, so they change without a release.
 public struct AutoPolicy: Equatable, Codable {
-    /// every line measured again this often, while the tunnel is in use
+    /// every line measured once in this long, one probe at a time (the trickle), while the tunnel is in use
     public var roundSec: Int = 180
     /// a line that failed its last probe is tried again this often instead
     public var failedRetrySec: Int = 900
@@ -17,8 +17,8 @@ public struct AutoPolicy: Equatable, Codable {
     public var marginPct: Int = 15
     /// …and by at least this many ms, to take over
     public var floorMs: Int = 25
-    /// bytes going out and none coming back for this long: the line in use is probed at once
-    public var stallSec: Int = 8
+    /// bytes going out and none coming back for this long: the line in use and the best alternative are probed at once
+    public var stallSec: Int = 4
     /// one probe request's window; a line that does not answer within it counts as failed
     public var probeTimeoutSec: Int = 5
     /// lines probed at once in a round (the first race and a "Ping all" measure every line at once)
@@ -29,27 +29,38 @@ public struct AutoPolicy: Equatable, Codable {
     public var searchSec: Int = 60
     /// …and the subscription fetched again this often, for lines the box may have replaced
     public var searchFetchSec: Int = 300
-    /// a settling round this long after the first race of a connection (0 = none): the race measures every line at once
-    /// on a core a second old and reads high, so the first pick can be a poor one for a whole round (2026-10-30)
-    public var settleSec: Int = 10
-    /// each round's interval is roundSec give or take this share, drawn anew every round, so the bursts are not periodic
+    /// the first pass after Connect (and after a network change) goes best-known-first at this pace per probe, two at a
+    /// time, so the whole picture is in hand within seconds without a burst
+    public var firstPaceSec: Int = 1
+    /// the line in use is probed again this often while the app is on screen (its chip is being looked at); otherwise its
+    /// health is read from the traffic and it is probed once per pass like any line
+    public var currentSec: Int = 30
+    /// each step of the trickle is the pace give or take this share, so the probes are not metronomic
     public var jitterPct: Int = 10
+    /// no latency-only move within this long of the last move (a failover ignores it)
+    public var dwellSec: Int = 90
+    /// a latency-only move needs the candidate ahead by the margin at this many consecutive pass ends (one when ahead
+    /// by twice the margin)
+    public var persistPasses: Int = 2
+    /// a failed line's retry doubles from failedRetrySec at each failure up to this
+    public var retryCapSec: Int = 7200
+    /// a steady step of the trickle fires only while the radio is warm — bytes moved within this long — or the app is on
+    /// screen; otherwise the phone sleeps and nothing is probed (the first pass, a network change and a wake are forced)
+    public var warmSec: Int = 20
+    /// the window of the failover probes (the line in use and the best alternative together): a dead line is left within it
+    public var failoverMs: Int = 1500
 
     public init() {}
     public init(roundSec: Int, failedRetrySec: Int, idleSec: Int, marginPct: Int, floorMs: Int, stallSec: Int,
                 probeTimeoutSec: Int, concurrency: Int, freshSec: Int, searchSec: Int = 60, searchFetchSec: Int = 300,
-                settleSec: Int = 10, jitterPct: Int = 10) {
+                firstPaceSec: Int = 1, currentSec: Int = 30, jitterPct: Int = 10, dwellSec: Int = 90, persistPasses: Int = 2,
+                retryCapSec: Int = 7200, warmSec: Int = 20, failoverMs: Int = 1500) {
         self.roundSec = roundSec; self.failedRetrySec = failedRetrySec; self.idleSec = idleSec; self.marginPct = marginPct
         self.floorMs = floorMs; self.stallSec = stallSec; self.probeTimeoutSec = probeTimeoutSec; self.concurrency = concurrency
         self.freshSec = freshSec; self.searchSec = searchSec; self.searchFetchSec = searchFetchSec
-        self.settleSec = settleSec; self.jitterPct = jitterPct
-    }
-
-    /// The next round's interval: roundSec moved by up to jitterPct either way, `r` a draw in 0 ..< 1 (handed in so the
-    /// rule is testable): 0 → the shortest, 0.5 → roundSec, 1 → the longest.
-    public func jitteredRound(using r: Double) -> TimeInterval {
-        let share = Double(jitterPct) / 100 * (2 * min(max(r, 0), 1) - 1)
-        return TimeInterval(roundSec) * (1 + share)
+        self.firstPaceSec = firstPaceSec; self.currentSec = currentSec; self.jitterPct = jitterPct
+        self.dwellSec = dwellSec; self.persistPasses = persistPasses; self.retryCapSec = retryCapSec
+        self.warmSec = warmSec; self.failoverMs = failoverMs
     }
 
     public static let `default` = AutoPolicy()
@@ -65,12 +76,13 @@ public struct AutoPolicy: Equatable, Codable {
 
     /// Should new connections move from the line in use (its last time, -1 failed, 0 not measured) to the best line
     /// (bestMs > 0)? Yes when the line in use failed, or when the best is better by the margin — at least floorMs and
-    /// at least marginPct of the line in use. A line not measured yet keeps its connections until its own result is in.
-    public func shouldSwitch(currentMs: Int64, bestMs: Int64) -> Bool {
+    /// at least marginPct of the line in use, both times `factor` (2 for "clearly better"). A line not measured yet
+    /// keeps its connections until its own result is in.
+    public func shouldSwitch(currentMs: Int64, bestMs: Int64, factor: Int64 = 1) -> Bool {
         if bestMs <= 0 { return false }
         if currentMs < 0 { return true }
         if currentMs == 0 { return false }
-        let margin = max(Int64(floorMs), currentMs * Int64(marginPct) / 100)
+        let margin = max(Int64(floorMs) * factor, currentMs * Int64(marginPct) * factor / 100)
         return bestMs < currentMs - margin
     }
 
@@ -116,8 +128,14 @@ public struct AutoPolicy: Equatable, Codable {
             case "fresh": p.freshSec = min(max(v, 0), 86400)
             case "search": p.searchSec = min(max(v, 15), 600)
             case "sfetch": p.searchFetchSec = min(max(v, 60), 3600)
-            case "settle": p.settleSec = min(max(v, 0), 120)
+            case "pace": p.firstPaceSec = min(max(v, 1), 30)
+            case "cur": p.currentSec = min(max(v, 10), 300)
             case "jitter": p.jitterPct = min(max(v, 0), 50)
+            case "dwell": p.dwellSec = min(max(v, 0), 3600)
+            case "persist": p.persistPasses = min(max(v, 1), 10)
+            case "cap": p.retryCapSec = min(max(v, 60), 86400)
+            case "warm": p.warmSec = min(max(v, 5), 600)
+            case "fover": p.failoverMs = min(max(v, 500), 10000)
             default: break
             }
         }
