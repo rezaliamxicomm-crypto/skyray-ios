@@ -2,7 +2,7 @@
 # Vendor/libxray-source.lock) with the subscription fetch with Encrypted Client Hello (echfetch/) and Auto's balancer override
 # (libxray/autoctl_export.go) and the signed answer's check (echfetch/signature.go, 2.1) compiled in.
 # scripts/fetch-libxray.sh downloads the release's zip and verifies it against this sha256.
-tag=libxray-v26.9.9-ech-ec487185a8
-url=https://github.com/rezaliamxicomm-crypto/skyray-ios/releases/download/libxray-v26.9.9-ech-ec487185a8/libxray-apple-cgo.zip
+tag=libxray-v26.9.9-ech-b667f83c32
+url=https://github.com/rezaliamxicomm-crypto/skyray-ios/releases/download/libxray-v26.9.9-ech-b667f83c32/libxray-apple-cgo.zip
 asset=libxray-apple-cgo.zip
-sha256=fb52d1e26091e0ef956b6eb91b70587b83ffac01466ed6f7e5495c28efc73b73
+sha256=08aaf7ac25d936d0fb5283a04c2639f7e7899f4c7808c1044b65470f996ce5ac
