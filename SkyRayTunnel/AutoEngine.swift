@@ -46,6 +46,7 @@ final class AutoEngine {
     private var samples: [AutoPolicy.Sample] = []
     private var lastTrafficAt = Date()
     private var lastRoundAt = Date.distantPast
+    private var roundInterval: TimeInterval = 180   // this round's interval: roundSec with the jitter, drawn when a round ends
     private var lastStallProbeAt = Date.distantPast
     private var timer: DispatchSourceTimer?
     private var measuring = false
@@ -70,7 +71,8 @@ final class AutoEngine {
 
     func start() {
         log.info("auto: \(lines.count) lines behind the balancer, starting on \(name(current)); round \(policy.roundSec) s, failed \(policy.failedRetrySec) s, idle \(policy.idleSec) s, search \(policy.searchSec) s, margin \(policy.marginPct) % / \(policy.floorMs) ms, stall \(policy.stallSec) s")
-        race(reason: "connect") { _ in }
+        roundInterval = TimeInterval(policy.roundSec)
+        race(reason: "connect") { [weak self] _ in self?.scheduleSettle() }
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + AutoEngine.tick, repeating: AutoEngine.tick)
         t.setEventHandler { [weak self] in self?.tickNow() }
@@ -92,8 +94,31 @@ final class AutoEngine {
         samples.removeAll()
         queue.asyncAfter(deadline: .now() + AutoEngine.networkSettle) { [weak self] in
             guard let self = self, !self.stopped else { return }
-            self.race(reason: "network") { _ in }
+            self.race(reason: "network") { [weak self] _ in self?.scheduleSettle() }
         }
+    }
+
+    /// The first race measures every line at once on a core a second old and reads high: a settling round with the
+    /// normal concurrency, settleSec later, corrects the pick within seconds instead of at the next round.
+    private func scheduleSettle() {
+        guard policy.settleSec > 0 else { return }
+        queue.asyncAfter(deadline: .now() + TimeInterval(policy.settleSec)) { [weak self] in
+            guard let self = self, !self.stopped, !self.searching else { return }
+            self.log.info("auto: the settling round")
+            self.measure(self.lines, concurrency: self.policy.concurrency) { [weak self] _ in
+                guard let self = self else { return }
+                self.markRound()
+                let moved = self.decide(reason: "settle")
+                self.report(trigger: "settle", switched: moved)
+                self.updateSearching()
+            }
+        }
+    }
+
+    /// A round ended now; the next one comes after roundSec give or take the jitter.
+    private func markRound() {
+        lastRoundAt = Date()
+        roundInterval = policy.jitteredRound(using: Double.random(in: 0..<1))
     }
 
     /// The customer pressed Test latency: every line measured now, the decision made, the outcome said —
@@ -135,7 +160,7 @@ final class AutoEngine {
             return
         }
         let inUse = now.timeIntervalSince(lastTrafficAt) < TimeInterval(policy.idleSec)
-        if !measuring, inUse, now.timeIntervalSince(lastRoundAt) >= TimeInterval(policy.roundSec) { round() }
+        if !measuring, inUse, now.timeIntervalSince(lastRoundAt) >= roundInterval { round() }
     }
 
     private func sample(_ now: Date) {
@@ -156,7 +181,7 @@ final class AutoEngine {
             let rest = self.lines.filter { $0.id != self.current }
             self.measure(rest, concurrency: min(rest.count, AutoEngine.raceConcurrency)) { [weak self] _ in
                 guard let self = self else { return }
-                self.lastRoundAt = Date()
+                self.markRound()
                 let moved = self.decide(reason: "stall")
                 self.report(trigger: "stall", switched: moved)
                 self.updateSearching()
@@ -165,9 +190,10 @@ final class AutoEngine {
     }
 
     private func round() {
-        lastRoundAt = Date()
+        let interval = roundInterval
+        markRound()
         let now = Date()
-        let due = searching ? lines : lines.filter { policy.due(now: now, probedAt: probedAt[$0.id], failed: (results[$0.id] ?? 0) < 0) }
+        let due = searching ? lines : lines.filter { policy.due(now: now, probedAt: probedAt[$0.id], failed: (results[$0.id] ?? 0) < 0, roundInterval: interval) }
         if due.isEmpty { return }
         measure(due, concurrency: policy.concurrency) { [weak self] _ in
             guard let self = self else { return }
@@ -180,7 +206,7 @@ final class AutoEngine {
     private func race(reason: String, completion: @escaping (String) -> Void) {
         measure(lines, concurrency: min(lines.count, AutoEngine.raceConcurrency)) { [weak self] _ in
             guard let self = self else { completion("none"); return }
-            self.lastRoundAt = Date()
+            self.markRound()
             let moved = self.decide(reason: reason)
             self.report(trigger: reason, switched: moved)
             self.updateSearching()

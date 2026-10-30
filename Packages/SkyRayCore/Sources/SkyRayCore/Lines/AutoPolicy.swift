@@ -4,7 +4,7 @@ import Foundation
 /// line of the subscription behind one balancer; the extension measures the lines through that core (AutoEngine) and
 /// holds the balancer to the best, so a change of line moves new connections only and cuts nothing that is open. The
 /// numbers here are the policy's defaults; the service's header X-Etha-Auto ("round=180,failed=900,idle=600,
-/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600,search=60,sfetch=300") replaces any of them on the next
+/// margin=15,floor=25,stall=8,timeout=5,conc=8,fresh=600,search=60,sfetch=300,settle=10,jitter=20") replaces any of them on the next
 /// fetch, so they change without a release.
 public struct AutoPolicy: Equatable, Codable {
     /// every line measured again this often, while the tunnel is in use
@@ -29,13 +29,27 @@ public struct AutoPolicy: Equatable, Codable {
     public var searchSec: Int = 60
     /// …and the subscription fetched again this often, for lines the box may have replaced
     public var searchFetchSec: Int = 300
+    /// a settling round this long after the first race of a connection (0 = none): the race measures every line at once
+    /// on a core a second old and reads high, so the first pick can be a poor one for a whole round (2026-10-30)
+    public var settleSec: Int = 10
+    /// each round's interval is roundSec give or take this share, drawn anew every round, so the bursts are not periodic
+    public var jitterPct: Int = 20
 
     public init() {}
     public init(roundSec: Int, failedRetrySec: Int, idleSec: Int, marginPct: Int, floorMs: Int, stallSec: Int,
-                probeTimeoutSec: Int, concurrency: Int, freshSec: Int, searchSec: Int = 60, searchFetchSec: Int = 300) {
+                probeTimeoutSec: Int, concurrency: Int, freshSec: Int, searchSec: Int = 60, searchFetchSec: Int = 300,
+                settleSec: Int = 10, jitterPct: Int = 20) {
         self.roundSec = roundSec; self.failedRetrySec = failedRetrySec; self.idleSec = idleSec; self.marginPct = marginPct
         self.floorMs = floorMs; self.stallSec = stallSec; self.probeTimeoutSec = probeTimeoutSec; self.concurrency = concurrency
         self.freshSec = freshSec; self.searchSec = searchSec; self.searchFetchSec = searchFetchSec
+        self.settleSec = settleSec; self.jitterPct = jitterPct
+    }
+
+    /// The next round's interval: roundSec moved by up to jitterPct either way, `r` a draw in 0 ..< 1 (handed in so the
+    /// rule is testable): 0 → the shortest, 0.5 → roundSec, 1 → the longest.
+    public func jitteredRound(using r: Double) -> TimeInterval {
+        let share = Double(jitterPct) / 100 * (2 * min(max(r, 0), 1) - 1)
+        return TimeInterval(roundSec) * (1 + share)
     }
 
     public static let `default` = AutoPolicy()
@@ -82,10 +96,11 @@ public struct AutoPolicy: Equatable, Codable {
         return newest.up - base.up >= AutoPolicy.stallMinUpBytes && newest.down - base.down <= 0
     }
 
-    /// Is a line due for a probe in this round? Failed lines wait failedRetrySec, the rest roundSec.
-    public func due(now: Date, probedAt: Date?, failed: Bool) -> Bool {
+    /// Is a line due for a probe in this round? Failed lines wait failedRetrySec, the rest the round's interval —
+    /// roundSec, or the jittered one the engine drew for this round.
+    public func due(now: Date, probedAt: Date?, failed: Bool, roundInterval: TimeInterval? = nil) -> Bool {
         guard let at = probedAt else { return true }
-        return now.timeIntervalSince(at) >= TimeInterval(failed ? failedRetrySec : roundSec)
+        return now.timeIntervalSince(at) >= (failed ? TimeInterval(failedRetrySec) : (roundInterval ?? TimeInterval(roundSec)))
     }
 
     /// The header's "key=value" list over base: unknown keys ignored, each value clamped to its range, a value that is
@@ -108,6 +123,8 @@ public struct AutoPolicy: Equatable, Codable {
             case "fresh": p.freshSec = min(max(v, 0), 86400)
             case "search": p.searchSec = min(max(v, 15), 600)
             case "sfetch": p.searchFetchSec = min(max(v, 60), 3600)
+            case "settle": p.settleSec = min(max(v, 0), 120)
+            case "jitter": p.jitterPct = min(max(v, 0), 50)
             default: break
             }
         }

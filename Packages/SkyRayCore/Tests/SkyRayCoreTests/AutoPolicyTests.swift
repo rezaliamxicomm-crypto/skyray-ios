@@ -75,4 +75,22 @@ final class AutoPolicyTests: XCTestCase {
         XCTAssertEqual(clamped.searchSec, 15)
         XCTAssertEqual(clamped.searchFetchSec, 3600)
     }
+
+    func testTheSettlingRoundAndTheJitterComeFromTheHeaderToo() {
+        XCTAssertEqual(AutoPolicy().settleSec, 10)
+        XCTAssertEqual(AutoPolicy().jitterPct, 20)
+        let q = AutoPolicy.parse("settle=0,jitter=50")
+        XCTAssertEqual(q.settleSec, 0); XCTAssertEqual(q.jitterPct, 50)
+        let clamped = AutoPolicy.parse("settle=999,jitter=99")
+        XCTAssertEqual(clamped.settleSec, 120); XCTAssertEqual(clamped.jitterPct, 50)
+        let p = AutoPolicy()
+        XCTAssertEqual(p.jitteredRound(using: 0.5), 180, accuracy: 0.001)
+        XCTAssertEqual(p.jitteredRound(using: 0), 144, accuracy: 0.001)
+        XCTAssertEqual(p.jitteredRound(using: 1), 216, accuracy: 0.001)
+        XCTAssertEqual(AutoPolicy.parse("jitter=0").jitteredRound(using: 0.9), 180, accuracy: 0.001)
+        let now = Date(), at = now.addingTimeInterval(-150)
+        XCTAssertFalse(p.due(now: now, probedAt: at, failed: false))                          // 150 s < 180
+        XCTAssertTrue(p.due(now: now, probedAt: at, failed: false, roundInterval: 144))        // the shortened round this time
+        XCTAssertFalse(p.due(now: now, probedAt: at, failed: true, roundInterval: 144))        // a failed line still waits its 900 s
+    }
 }
