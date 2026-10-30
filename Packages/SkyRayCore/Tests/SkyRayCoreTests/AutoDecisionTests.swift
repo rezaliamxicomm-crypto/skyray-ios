@@ -43,18 +43,23 @@ final class AutoDecisionTests: XCTestCase {
         XCTAssertNil(d.target(now: 101, phase: .manual, current: c("b", 160), candidates: [c("b", 160), c("a", 150, 0)], policy: p))     // 10 ms: under the floor
     }
 
-    /// An hour of steady state with every line's time wandering ±10 % around the same value: nobody moves. A line that
-    /// then settles 30 % below the line in use for two passes: exactly one move. The line in use dying: one failover.
+    /// An hour of steady state with every line's time wandering ±10 % around its value, the noise flipping sign from pass
+    /// to pass (a lead that does not last): nobody moves. A line that then settles 30 % below the line in use for two
+    /// passes: exactly one move. The line in use dying: one failover, at once.
     func testSimulationNoiseMovesNobodyARealLeadMovesOnceADeathMovesAtOnce() {
         var d = AutoDecision()
-        var rng = SystemRandomNumberGenerator()
         var current = "r1"; var moves = 0
+        let names = ["r1", "r2", "x1", "w1"]
         let base: [String: Int64] = ["r1": 200, "r2": 205, "x1": 220, "w1": 210]
         for pass in 1...20 {                                                   // an hour of passes
-            let cands = base.map { id, ms in c(id, ms + Int64.random(in: -(ms / 10)...(ms / 10), using: &rng), ["r1", "r2", "x1", "w1"].firstIndex(of: id)!) }
+            let cands = names.enumerated().map { i, id -> AutoDecision.Candidate in
+                let ms = base[id]!
+                let sign: Int64 = ((pass + i) % 2 == 0) ? 1 : -1                // this pass's leader is next pass's laggard
+                return c(id, ms + sign * ms / 10, i)
+            }
             if let t = d.target(now: Double(pass * 180), phase: .passEnd, current: cands.first { $0.id == current }!, candidates: cands, policy: p) { current = t; moves += 1 }
         }
-        XCTAssertEqual(moves, 0, "noise of ±10 % must not move anyone")
+        XCTAssertEqual(moves, 0, "noise of ±10 % that flips each pass must not move anyone")
         for pass in 21...24 {                                                  // r2 settles clearly ahead
             let cands = [c("r1", 200), c("r2", 140, 1), c("x1", 220, 2), c("w1", 210, 3)]
             if let t = d.target(now: Double(pass * 180), phase: .passEnd, current: cands.first { $0.id == current }!, candidates: cands, policy: p) { current = t; moves += 1 }

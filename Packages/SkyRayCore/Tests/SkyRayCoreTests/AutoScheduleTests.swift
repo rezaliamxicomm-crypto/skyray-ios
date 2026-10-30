@@ -13,12 +13,12 @@ final class AutoScheduleTests: XCTestCase {
         XCTAssertEqual(s.action(now: 10, warm: false, watched: false, searching: false, current: "r1", due: all), .probeCurrent)   // first pass: in use or not, watched or not
         s.currentProbed(now: 10, policy: p)
         XCTAssertEqual(s.action(now: 10, warm: false, watched: false, searching: false, current: "r1", due: all), .probe(["r2", "x1"]))   // two at a time, the line in use skipped
-        XCTAssertFalse(s.probed(now: 10, count: 2, policy: p, draw: 0.5))
+        XCTAssertFalse(s.probed(now: 10, ids: ["r2", "x1"], policy: p, draw: 0.5))
         XCTAssertNil(s.action(now: 10.5, warm: false, watched: false, searching: false, current: "r1", due: all))
         XCTAssertEqual(s.action(now: 11, warm: false, watched: false, searching: false, current: "r1", due: all), .probe(["x2", "w1"]))   // a second a step
-        XCTAssertFalse(s.probed(now: 11, count: 2, policy: p, draw: 0.5))
+        XCTAssertFalse(s.probed(now: 11, ids: ["x2", "w1"], policy: p, draw: 0.5))
         XCTAssertEqual(s.action(now: 12, warm: false, watched: false, searching: false, current: "r1", due: all), .probe(["w2"]))       // r1 is the line in use: the pass ends with w2
-        XCTAssertTrue(s.probed(now: 12, count: 1, policy: p, draw: 0.5))                                                                  // a pass: the first pass is over
+        XCTAssertTrue(s.probed(now: 12, ids: ["w2"], policy: p, draw: 0.5))                                                                  // a pass: the first pass is over
         XCTAssertEqual(s.phase, .steady); XCTAssertEqual(s.passes, 1); XCTAssertFalse(s.forced)
         XCTAssertNil(s.action(now: 13, warm: false, watched: false, searching: false, current: "r1", due: all))                          // idle now: nothing
         XCTAssertEqual(s.pace(policy: p, draw: 0.5), 30, accuracy: 0.001)                                                                  // 180 s over 6 lines
@@ -62,6 +62,12 @@ final class AutoScheduleTests: XCTestCase {
         XCTAssertEqual(s.next(count: 1, current: "a", due: { $0 == "a" }), [])
         s.nothingDue(now: 60, policy: p, draw: 0.5)
         XCTAssertEqual(s.nextProbeAt!, 120, accuracy: 0.001)
+        XCTAssertEqual(s.cursor, 0); XCTAssertEqual(s.passes, 1)                                                     // the rest held nothing: the pass ended
+        // a skipped line on the way counts as consumed: the step after [r2, x1] (r1 skipped) is [x2, w1], never x1 again
+        var r = AutoSchedule(); r.start(now: 0, order: ["r1", "r2", "x1", "x2", "w1", "w2"])
+        XCTAssertEqual(r.next(count: 2, current: "r1", due: all), ["r2", "x1"]); _ = r.probed(now: 0, ids: ["r2", "x1"], policy: p, draw: 0.5)
+        XCTAssertEqual(r.cursor, 3); XCTAssertEqual(r.next(count: 2, current: "r1", due: all), ["x2", "w1"])
+        _ = r.probed(now: 1, ids: ["x2", "w1"], policy: p, draw: 0.5); XCTAssertEqual(r.next(count: 2, current: "r1", due: all), ["w2"])   // a step never straddles a pass
     }
 
     func testIdleStopsTheTrickleAndTrafficReturningResumesItWithTheLineInUse() {
@@ -91,7 +97,9 @@ final class AutoScheduleTests: XCTestCase {
         XCTAssertEqual(s.action(now: 50, warm: false, watched: false, searching: true, current: "a", due: { _ in false }), .probe(["a", "b"]))   // every line, the line in use too, two at a time
         s.searchStep(now: 50, count: 2)
         XCTAssertNil(s.action(now: 50.5, warm: false, watched: false, searching: true, current: "a", due: all))
-        XCTAssertEqual(s.action(now: 51, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["c", "a"]))
+        XCTAssertEqual(s.action(now: 51, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["c"]))        // to the end of the rotation…
+        s.searchStep(now: 51, count: 1)
+        XCTAssertEqual(s.action(now: 52, warm: false, watched: false, searching: true, current: "a", due: all), .probe(["a", "b"]))   // …then round again
     }
 
     func testTheFallbackLastsOnlyWhileTheTargetAnswersNobody() {

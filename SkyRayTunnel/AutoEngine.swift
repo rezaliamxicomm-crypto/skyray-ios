@@ -73,6 +73,8 @@ final class AutoEngine {
     private var stopped = false
     private(set) var searching = false
     private var movedInPass = false
+    private var probedSinceReport = Set<String>()
+    private var searchSteps = 0
 
     private static let tick: TimeInterval = 1
     private static let samplesKept = 32
@@ -224,12 +226,15 @@ final class AutoEngine {
 
     // MARK: the trickle
 
-    /// The lines in the order the trickle takes them: this network's memory first (known good by time, unseen, failed),
-    /// the box's advice where the memory is empty, else the subscription's order; by id.
+    /// The lines in the order the trickle takes them: what this network's memory knows good, by time; then the lines it
+    /// has not seen, in the box's advised order where there is one (its dead ones last among them), else the
+    /// subscription's; then the lines the memory holds as failed. By id.
     private func order() -> [String] {
         let labels = lines.map { $0.label }
-        var arranged = health.bestFirst(labels)
-        if health.entries.isEmpty, let h = hint { arranged = h.arrange(labels) }
+        let good = health.bestFirst(labels).filter { health.lastMs($0) != nil && !health.isDead($0) }
+        let unseen = labels.filter { health.lastMs($0) == nil && !health.isDead($0) }
+        let dead = labels.filter { health.isDead($0) }
+        let arranged = good + (hint?.arrange(unseen) ?? unseen) + dead
         return arranged.compactMap { l in lines.first { $0.label == l }?.id }
     }
 
@@ -255,7 +260,7 @@ final class AutoEngine {
             self.record(out, which: which)
             let now = AutoEngine.mono()
             let first = self.schedule.phase == .first
-            let passEnd = self.schedule.probed(now: now, count: which.count, policy: self.policy, draw: Double.random(in: 0..<1))
+            let passEnd = self.schedule.probed(now: now, ids: which.map { $0.id }, policy: self.policy, draw: Double.random(in: 0..<1))
             if first, self.decide(.first, reason: "first pass") { self.movedInPass = true }
             if passEnd {
                 if !first, self.decide(.passEnd, reason: "pass end") { self.movedInPass = true }
@@ -333,6 +338,8 @@ final class AutoEngine {
             guard let self = self else { return }
             self.record(out, which: which)
             self.schedule.searchStep(now: AutoEngine.mono(), count: which.count)
+            self.searchSteps += 1
+            if self.searchSteps % 30 == 0 { self.refreshHint() }
             if let found = which.first(where: { (out[$0.id] ?? -1) > 0 }), found.id != self.current {
                 self.switchTo(id: found.id, reason: "a line answers again")
                 self.decision.moved(now: AutoEngine.mono())
@@ -404,6 +411,7 @@ final class AutoEngine {
         let wall = AutoEngine.wall()
         for (id, ms) in out {
             results[id] = ms
+            probedSinceReport.insert(id)
             if ms > 0 { health.ok(label(id), ms: ms, now: wall) } else { health.failed(label(id), now: wall, policy: policy) }
         }
         let snapshot = results
@@ -451,12 +459,13 @@ final class AutoEngine {
         store.updateTunnelState { $0.latencyMs = ms; $0.latencyAt = Date() }
     }
 
-    /// What was measured, kept for the next fetch (the header X-Etha-Lines), with the pass's best download rate.
+    /// What was measured since the last report — the lines probed, not the ones waiting their retry with an old
+    /// result — kept for the next fetch (the header X-Etha-Lines), with the pass's best download rate.
     private func report(trigger: String, switched: Bool) {
         let inUse = line(current)?.remark
         let header = LineReport.build(now: Date(), trigger: trigger, inUseRemark: inUse, switched: switched,
-                                      results: lines.map { ($0.remark, results[$0.id] ?? 0) }, rateKbps: passRateKbps)
-        if let h = header { store.updateTunnelState { $0.lineReport = h } }
+                                      results: lines.map { ($0.remark, probedSinceReport.contains($0.id) ? (results[$0.id] ?? 0) : 0) }, rateKbps: passRateKbps)
+        if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll() }
     }
 
     /// Searching = every line measured and none answering. Before entering it the line in use is probed against the
@@ -484,6 +493,18 @@ final class AutoEngine {
         if dead != searching { enterSearching(dead) }
     }
 
+    /// The box's latest advice (the app's refetch while searching brings a fresh hint): the outage flag follows it.
+    private func refreshHint() {
+        guard let fresh = Hint.parse(store.loadSnapshot()?.info.hint) else { return }
+        if fresh == hint { return }
+        hint = fresh
+        if searching {
+            let outage = fresh.outage
+            store.updateTunnelState { $0.outage = outage }
+            log.info("auto: the box's advice changed while searching (outage: \(outage))")
+        }
+    }
+
     private func enterSearching(_ on: Bool) {
         searching = on
         let outage = on && (hint?.outage ?? false)
@@ -491,6 +512,7 @@ final class AutoEngine {
         store.updateTunnelState { $0.searching = on; $0.outage = outage }
         let now = AutoEngine.mono()
         if on {
+            searchSteps = 0
             schedule.searchingBegan(now: now)
             report(trigger: "search", switched: false)
         } else {

@@ -91,11 +91,25 @@ struct SubscriptionImporter {
             if !report.isEmpty { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
             return try Self.read(status: result.status, headers: result.headers, body: Data(result.body.utf8))
         }
-        // Nobody answered on any of those ways: the last resort, the link fetched as every version before 1.3.6 did.
-        AppLog.warn("fetch: ECH and the hop got no answer, fetching without them (the last resort)")
-        let plain = try await Self.fetchPlain(url)
-        AppLog.info("fetch: without ECH, status \(plain.status)")
-        return try Self.read(status: plain.status, headers: plain.headers, body: plain.body)
+        // Nobody answered on any of those ways: the last resort, the link fetched by name without ECH as every version
+        // before 1.3.6 did — through the core like every other way (2.1), so the certificate and the box's signature are
+        // checked the same; an answer signed before the one held is refused here too.
+        AppLog.warn("fetch: ECH and the hop got no answer, fetching by name without ECH (the last resort)")
+        let plainRequest = EchFetchRequest(url: url, addresses: [], pinnedAddresses: [], resolvers: [], lookupName: "", pinnedKey: "",
+                                           userAgent: Self.userAgent, timeoutMs: EchFetch.timeoutMs,
+                                           interface: tunnelUp ? (NetworkInterfaces.physical() ?? "") : "", plain: true, headers: headers)
+        guard let plain = await Self.run(plainRequest), plain.plainAnswered else {
+            AppLog.warn("fetch: by name without ECH: nothing")
+            throw FetchError.network
+        }
+        if let held = store.lastSignedAt, plain.signedAt > 0, plain.signedAt < held {
+            AppLog.warn("fetch: by name without ECH: signed before the one held (\(plain.signedAt) < \(held)): not taken")
+            throw FetchError.network
+        }
+        AppLog.info("fetch: by name without ECH via \(plain.address), status \(plain.status), signed \(plain.signed.isEmpty ? "-" : plain.signed)")
+        if plain.signedAt > 0 { store.lastSignedAt = max(store.lastSignedAt ?? 0, plain.signedAt) }
+        if !report.isEmpty { store.updateTunnelState { if $0.lineReport == report { $0.lineReport = nil } } }
+        return try Self.read(status: plain.status, headers: plain.headers, body: Data(plain.body.utf8))
     }
 
     /// The server's answer as the app reads it: the subscription, or what is wrong with the link.
@@ -113,31 +127,6 @@ struct SubscriptionImporter {
         return (info, links)
     }
 
-    /// The fetch as it was before 1.3.6: URLSession, the host's name in the clear. Only after ECH got no answer.
-    private static func fetchPlain(_ link: String) async throws -> (status: Int, headers: [String: String], body: Data) {
-        guard let url = URL(string: link) else { throw FetchError.unknownLink }
-        var request = URLRequest(url: url)
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("*/*", forHTTPHeaderField: "Accept")
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 15
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForResource = 25
-        let session = URLSession(configuration: config)
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw FetchError.network
-        }
-        guard let http = response as? HTTPURLResponse else { throw FetchError.network }
-        var headers: [String: String] = [:]
-        for (key, value) in http.allHeaderFields {
-            if let k = key as? String, let v = value as? String { headers[k.lowercased()] = v }
-        }
-        return (http.statusCode, headers, data)
-    }
 
     /// Every way started at its time; the first whose server answered wins, the others run out on their own (the
     /// core's call cannot be cut short) and their answers are dropped. nil when nobody answered.

@@ -65,24 +65,30 @@ public struct AutoSchedule: Equatable {
     }
 
     /// The next lines of the rotation that may be probed: not the line in use, not one waiting its retry; from the
-    /// cursor on, wrapping, up to `count`.
+    /// cursor to the end of the rotation (a step never straddles a pass boundary), up to `count`. Empty when nothing
+    /// before the end may be probed: the pass ends there (`nothingDue`).
     public func next(count: Int, current: String?, due: (String) -> Bool) -> [String] {
-        guard !order.isEmpty else { return [] }
         var out: [String] = []
-        for k in 0..<order.count where out.count < count {
-            let id = order[(cursor + k) % order.count]
+        var k = cursor
+        while k < order.count, out.count < count {
+            let id = order[k]
+            k += 1
             if id == current || !due(id) { continue }
             out.append(id)
         }
         return out
     }
 
-    /// `n` lines were probed now: the cursor moves past them; a wrapped rotation is a pass. Returns true at a pass end.
-    public mutating func probed(now: Double, count: Int, policy: AutoPolicy, draw: Double) -> Bool {
-        let before = cursor
-        cursor += max(1, count)
+    /// `ids` (what `next` gave) were probed now: the cursor moves past them and past every line skipped on the way; a
+    /// cursor at the end of the rotation is a pass. Returns true at a pass end.
+    public mutating func probed(now: Double, ids: [String], policy: AutoPolicy, draw: Double) -> Bool {
+        if let last = ids.last, let at = order[min(cursor, order.count)...].firstIndex(of: last) {
+            cursor = at + 1
+        } else {
+            cursor += max(1, ids.count)
+        }
         var passEnd = false
-        if cursor >= order.count || before >= order.count {
+        if cursor >= order.count {
             cursor = 0; passes += 1; passEnd = true
             if phase == .first { phase = .steady }
             forced = false
@@ -91,10 +97,13 @@ public struct AutoSchedule: Equatable {
         return passEnd
     }
 
-    /// Nothing could be probed at this step (every other line waits its retry): the step is spent.
+    /// Nothing before the end of the rotation may be probed (the line in use, lines waiting their retry): the pass ends
+    /// here without a probe; the next step starts the rotation again after the pace.
     public mutating func nothingDue(now: Double, policy: AutoPolicy, draw: Double) {
-        nextProbeAt = now + (phase == .first ? Double(policy.firstPaceSec) : pace(policy: policy, draw: draw))
-        if phase == .first { phase = .steady; forced = false }
+        cursor = 0; passes += 1
+        if phase == .first { phase = .steady }
+        forced = false
+        nextProbeAt = now + pace(policy: policy, draw: draw)
     }
 
     /// The line in use was probed now.
@@ -109,7 +118,7 @@ public struct AutoSchedule: Equatable {
         currentDueAt = nil
     }
 
-    /// Searching: one step taken.
+    /// Searching: one step taken (the fast trickle wraps round the rotation without end).
     public mutating func searchStep(now: Double, count: Int) {
         cursor = (cursor + max(1, count)) % max(1, order.count)
         nextProbeAt = now + 1
