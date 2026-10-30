@@ -243,7 +243,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// remembers its fetch way; SubscriptionImporter.networkSignature reads the interfaces, this the path).
     private var networkSignature = "other"
 
-    private static func signature(of path: NWPath) -> String {
+    private static func signature(of path: Network.NWPath) -> String {   // qualified: NetworkExtension has an NWPath of its own
         if path.usesInterfaceType(.cellular) { return "cell" }
         if path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet) { return "wifi" }
         return "other"
