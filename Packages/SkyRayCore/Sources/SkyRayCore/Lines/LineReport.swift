@@ -4,10 +4,11 @@ import Foundation
 /// row of line_reports; the panel shows it — the customer sees no line name). The same shape as the Android app's
 /// EthaReport:
 ///
-///     v=1;t=<epoch s>;trig=<connect|first|auto|failover|manual|network|search>;use=<label>;sw=<0|1>;r=<kbps>;l=<label>:<ms>,<label>:-1,…
+///     v=1;t=<epoch s>;trig=<connect|first|auto|failover|manual|network|search>;use=<label>;sw=<0|1>;r=<kbps>;l=<label>:<ms>,<label>:-1,…;c=<label>:<ms>,…
 ///
 /// `r` (2.1): the best five-second download rate seen on the line in use during the pass, in kbps, when any (the passive
-/// throughput figure for the box's ranking; a latency probe cannot see a slow line).
+/// throughput figure for the box's ranking; a latency probe cannot see a slow line). `c` (2.1.1): the connect time of each
+/// line that was measured — its first request, handshakes and all — beside `l`'s warm round trip; only lines with one.
 ///
 /// A label is the line's name without its "EthaVPN-" prefix (REALITY-relay-FRA9-443, XHTTP-api-CleanIP1-443); a line
 /// named otherwise is left out. ms -1 = no answer. The header stays under 4 KB (at most 64 lines).
@@ -26,17 +27,25 @@ public enum LineReport {
 
     /// The header. `results`: (remark, ms) in the subscription's order, -1 failed, 0 not measured (left out); nil when
     /// nothing measured was one of our lines.
-    public static func build(now: Date, trigger: String, inUseRemark: String?, switched: Bool, results: [(String, Int64)], rateKbps: Int64 = 0) -> String? {
+    public static func build(now: Date, trigger: String, inUseRemark: String?, switched: Bool, results: [(String, Int64)], rateKbps: Int64 = 0,
+                             colds: [String: Int64] = [:]) -> String? {
         var items: [String] = []
+        var named = Set<String>()
         for (remark, ms) in results {
             guard let l = label(remark), ms != 0 else { continue }
-            items.append("\(l):\(ms < 0 ? -1 : ms)")
+            items.append("\(l):\(ms < 0 ? -1 : ms)"); named.insert(l)
             if items.count == maxLines { break }
         }
         if items.isEmpty { return nil }
+        var cold: [String] = []
+        for (remark, _) in results {
+            guard let l = label(remark), named.contains(l), let c = colds[remark], c > 0 else { continue }
+            cold.append("\(l):\(c)")
+        }
         let use = label(inUseRemark) ?? ""
         let rate = rateKbps > 0 ? ";r=\(rateKbps)" : ""
-        return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0)\(rate);l=\(items.joined(separator: ","))"
+        let c = cold.isEmpty ? "" : ";c=\(cold.joined(separator: ","))"
+        return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0)\(rate);l=\(items.joined(separator: ","))\(c)"
     }
 
     /// One text for a set of lines: the same set → the same text, whatever their ids (the line's link without its name)

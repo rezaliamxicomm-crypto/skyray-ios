@@ -87,6 +87,20 @@ final class AutoScheduleTests: XCTestCase {
         XCTAssertNil(fresh.action(now: 5, warm: true, watched: true, searching: false, current: "r1", due: all))                        // before Connect: nothing to wake
     }
 
+    func testConnectCanHoldTheFirstProbeAndWakingWithAnOldPictureFreshensIt() {
+        var s = AutoSchedule()
+        s.start(now: 10, order: lines, delay: 2)                                                                   // 2.1.1: two seconds for the tunnel to settle
+        XCTAssertNil(s.action(now: 11.9, warm: true, watched: true, searching: false, current: "r1", due: all))
+        XCTAssertEqual(s.action(now: 12, warm: false, watched: false, searching: false, current: "r1", due: all), .probeCurrent)
+        s.currentProbed(now: 12, policy: p)
+        s.reseed(now: 60, order: lines, policy: p, draw: 0.5)
+        s.freshen(now: 700, order: lines)                                                                            // the phone woke with an old picture
+        XCTAssertEqual(s.phase, .first); XCTAssertTrue(s.forced)
+        XCTAssertEqual(s.action(now: 700, warm: false, watched: false, searching: false, current: "r1", due: all), .probeCurrent)
+        s.currentProbed(now: 700, policy: p)
+        XCTAssertEqual(s.action(now: 700, warm: false, watched: false, searching: false, current: "r1", due: all), .probe(["r2", "x1"]))
+    }
+
     func testANetworkChangeRestartsAQuickPassInFifteenSecondsInUseOrNotDebounced() {
         var s = AutoSchedule(); s.reseed(now: 0, order: lines, policy: p, draw: 0.5)
         s.networkChanged(now: 100)

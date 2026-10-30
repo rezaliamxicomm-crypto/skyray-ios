@@ -61,6 +61,11 @@ final class AutoEngine {
 
     private(set) var current: String
     private var results: [String: Int64] = [:]
+    private var colds: [String: Int64] = [:]       // id → the connect time of the last probe: its first request, handshakes and all (2.1.1)
+    private var firstReading = false               // the line in use has answered once since Connect; before that the chip stays "Connecting…"
+    private var earlyRetried = false               // the first probe after Connect failed and was given a second try
+    private var startedAt: Double = 0
+    private var lastPassWall = Date()              // when the whole picture was last measured (a pass end); wall time: the clock sleeps with the phone
     private var schedule = AutoSchedule()
     private var decision = AutoDecision()
     private var health: LineHealth
@@ -89,7 +94,12 @@ final class AutoEngine {
     private static let samplesKept = 32
     private static let stallProbeGap: Double = 10
     private static let stallFalseAlarmRest: Double = 60
-    private static let networkSettle: Double = 15
+    private static let networkSettle: Double = 5         // 15 until 2.1.0; Connect itself no longer counts as a change
+    private static let startDelay: Double = 2            // the first probe after Connect waits for the tunnel to settle
+    private static let earlyRetryWindow: Double = 10     // a first probe that fails within this gets one more try…
+    private static let earlyRetry: Double = 1            // …a second later, nothing held against the line
+    private static let stalePass: TimeInterval = 600     // the phone woke with a picture older than this: the quick pass again
+    private static let phase1GraceMs = 2500              // phase two of a measurement starts this long after its start at the latest
     private static let watchedFor: Double = 15
     private static let rateWindow: Double = 5
     private static let rateMinBytes: Int64 = 256 * 1024
@@ -124,7 +134,8 @@ final class AutoEngine {
                 switchTo(id: id, reason: known != nil ? "known best on \(network)" : "the box's advice")
             }
         }
-        schedule.start(now: AutoEngine.mono(), order: order())
+        startedAt = AutoEngine.mono(); lastPassWall = Date()
+        schedule.start(now: startedAt, order: order(), delay: AutoEngine.startDelay)   // the first probe two seconds on, when the tunnel has settled (2.1.1)
         log.info("auto: \(lines.count) lines behind the balancer, on \(name(current)); network \(network), \(health.entries.count) lines remembered\(hint.map { ", the box advises \($0.order.count) (\($0.dead.count) dead\($0.outage ? ", outage" : ""))" } ?? ""); a pass every \(policy.roundSec) s, the first at \(policy.firstPaceSec) s a step")
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + AutoEngine.tick, repeating: AutoEngine.tick, leeway: .milliseconds(200))
@@ -150,6 +161,16 @@ final class AutoEngine {
         paused = false
         samples.removeAll(); rateSamples.removeAll()
         if timerSuspended, let t = timer { t.resume(); timerSuspended = false }
+        // the phone woke (2.1.1): the line in use is probed now, and the whole picture again when it is old — nothing ran meanwhile
+        guard schedule.nextProbeAt != nil else { return }
+        let now = AutoEngine.mono()
+        let age = Date().timeIntervalSince(lastPassWall)
+        if !searching, age > AutoEngine.stalePass {
+            schedule.freshen(now: now, order: order()); probesThisPass = 0
+            log.info("auto: the phone woke with a picture \(Int(age / 60)) min old; the quick pass runs again")
+        } else {
+            schedule.wake(now: now)
+        }
     }
 
     /// The app asked for the status: its chip is on screen, the line in use is kept fresh for it.
@@ -190,7 +211,14 @@ final class AutoEngine {
             return
         }
         measuring = true
-        measureSet(lines, concurrency: min(lines.count, max(1, policy.concurrency)), timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+        let timeout = policy.probeTimeoutSec * 1000
+        let rest = lines.filter { $0.id != current }
+        let first: [Line] = line(current).map { [$0] } ?? []
+        // the line in use first, so the chip has its number within a second; then every other line at once — connected all
+        // together, then read all together, so no line is read beside another's handshakes (2.1.1)
+        measureSet(first, concurrency: 1, timeoutMs: timeout, whole: false) { [weak self] _ in
+            guard let self = self else { completion("none"); return }
+            self.measureSet(rest, concurrency: max(1, rest.count), timeoutMs: timeout, whole: true) { [weak self] _ in
             guard let self = self else { completion("none"); return }
             self.measuring = false
             let moved = self.decide(.manual, reason: "manual")
@@ -202,6 +230,7 @@ final class AutoEngine {
             self.store.saveLineHealth(self.health, on: self.network)
             let answered = self.lines.contains { (self.results[$0.id] ?? 0) > 0 }
             completion(!answered ? "none" : (moved ? "switched" : "kept"))
+            }
         }
     }
 
@@ -325,6 +354,7 @@ final class AutoEngine {
         movedInPass = false
         passRateKbps = 0
         probesThisPass = 0
+        lastPassWall = Date()
         store.saveLineHealth(health, on: network)
     }
 
@@ -335,6 +365,14 @@ final class AutoEngine {
         measuring = true
         measureOnce([l], concurrency: 1, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
             guard let self = self else { return }
+            if (out[l.id] ?? -1) < 0, !self.firstReading, !self.earlyRetried, AutoEngine.mono() - self.startedAt < AutoEngine.earlyRetryWindow {
+                // the first probe after Connect ran on a tunnel still settling: once more in a second, nothing held against the line (2.1.1)
+                self.earlyRetried = true
+                self.schedule.currentDueAt = AutoEngine.mono() + AutoEngine.earlyRetry
+                self.measuring = false
+                self.log.info("auto: \(l.remark) gave no answer right after Connect; once more in a second")
+                return
+            }
             self.record(out, which: [l])
             self.schedule.currentProbed(now: AutoEngine.mono(), policy: self.policy)
             self.measuring = false
@@ -432,8 +470,10 @@ final class AutoEngine {
 
     /// A set of lines at once (a manual test): the box's target; nothing from it on any line and something from the
     /// fallback moves the probes to the fallback until the target answers again.
-    private func measureSet(_ which: [Line], concurrency: Int, timeoutMs: Int, completion: @escaping ([String: Int64]) -> Void) {
+    /// `whole`: the set stands for every line (the fallback question is asked only then).
+    private func measureSet(_ which: [Line], concurrency: Int, timeoutMs: Int, whole: Bool? = nil, completion: @escaping ([String: Int64]) -> Void) {
         if which.isEmpty || stopped { completion([:]); return }
+        let whole = whole ?? (which.count == lines.count)
         if schedule.fallback {
             let scout = which.first { $0.id == current } ?? which[0]
             measureOnce([scout], concurrency: 1, url: Etha.probeURL, timeoutMs: timeoutMs) { [weak self] one in
@@ -450,7 +490,7 @@ final class AutoEngine {
         }
         measureOnce(which, concurrency: concurrency, url: Etha.probeURL, timeoutMs: timeoutMs) { [weak self] first in
             guard let self = self else { return }
-            if which.count == self.lines.count, !first.isEmpty, first.values.allSatisfy({ $0 < 0 }) {
+            if whole, !first.isEmpty, first.values.allSatisfy({ $0 < 0 }) {
                 self.measureOnce(which, concurrency: concurrency, url: Etha.probeFallbackURL, timeoutMs: timeoutMs) { [weak self] again in
                     guard let self = self else { return }
                     let answered = again.values.contains { $0 > 0 }
@@ -465,24 +505,46 @@ final class AutoEngine {
         }
     }
 
+    /// Two phases (2.1.1), so that no line is read while another line's handshakes run beside it: every line opens its
+    /// connection and sends its first request (the cold time), up to `concurrency` at once; once every open attempt has
+    /// ended — or phase1Grace after the start, whichever comes first — each open connection gets its warm request, all
+    /// together (one small packet each way). A warm read that fails is tried once more on a fresh connection. The connect
+    /// times go to `colds` for the report; a line whose first request got nothing is -1.
     private func measureOnce(_ which: [Line], concurrency: Int, url: String, timeoutMs: Int, completion: @escaping ([String: Int64]) -> Void) {
         let slots = DispatchSemaphore(value: max(1, concurrency))
-        let group = DispatchGroup()
+        let opened = DispatchGroup()          // phase one: every open attempt ended
+        let done = DispatchGroup()            // the whole measurement
+        let go = DispatchSemaphore(value: 0)  // phase two may start: one signal per line
         let lock = NSLock()
         var out: [String: Int64] = [:]
+        var cold: [String: Int64] = [:]
         for line in which {
-            group.enter()
+            opened.enter(); done.enter()
             measureQueue.async {
                 slots.wait()
                 let probe = Probe(port: line.probePort, timeoutMs: timeoutMs)
-                let ms = probe.measureLine(url: url)
-                probe.invalidate()
+                let first = probe.open(url: url)
                 slots.signal()
-                lock.lock(); out[line.id] = ms; lock.unlock()
-                group.leave()
+                opened.leave()
+                var warm: Int64? = nil
+                if first != nil {
+                    go.wait()
+                    warm = probe.warm()
+                    if warm == nil, probe.open(url: url) != nil { warm = probe.warm() }   // once more on a fresh connection
+                }
+                probe.invalidate()
+                lock.lock(); out[line.id] = warm ?? -1; if let c = first { cold[line.id] = c }; lock.unlock()
+                done.leave()
             }
         }
-        group.notify(queue: queue) { completion(out) }
+        measureQueue.async {   // the barrier between the phases
+            _ = opened.wait(timeout: .now() + .milliseconds(min(AutoEngine.phase1GraceMs, timeoutMs)))
+            for _ in which { go.signal() }
+        }
+        done.notify(queue: queue) { [weak self] in
+            self?.colds.merge(cold) { _, new in new }
+            completion(out)
+        }
     }
 
     /// Results into the engine, the memory of the network and the App Group; the line in use's number to the chip.
@@ -493,6 +555,7 @@ final class AutoEngine {
             if ms > 0 {
                 results[id] = ms
                 health.ok(label(id), ms: ms, now: wall)
+                if id == current { firstReading = true }
             } else if condemn {
                 results[id] = ms
                 health.failed(label(id), now: wall, policy: policy)
@@ -543,6 +606,7 @@ final class AutoEngine {
     /// The line in use's time to the App Group: the app's chip.
     private func tellLatency() {
         let ms = results[current] ?? 0
+        if ms <= 0, !firstReading { return }   // before the first answer after Connect the chip stays "Connecting…", whatever a probe did (2.1.1)
         store.updateTunnelState { $0.latencyMs = ms; $0.latencyAt = Date() }
     }
 
@@ -550,8 +614,11 @@ final class AutoEngine {
     /// result — kept for the next fetch (the header X-Etha-Lines), with the pass's best download rate.
     private func report(trigger: String, switched: Bool) {
         let inUse = line(current)?.remark
+        var coldByRemark: [String: Int64] = [:]
+        for l in lines where probedSinceReport.contains(l.id) { if let c = colds[l.id], c > 0 { coldByRemark[l.remark] = c } }
         let header = LineReport.build(now: Date(), trigger: trigger, inUseRemark: inUse, switched: switched,
-                                      results: lines.map { ($0.remark, probedSinceReport.contains($0.id) ? (results[$0.id] ?? 0) : 0) }, rateKbps: passRateKbps)
+                                      results: lines.map { ($0.remark, probedSinceReport.contains($0.id) ? (results[$0.id] ?? 0) : 0) }, rateKbps: passRateKbps,
+                                      colds: coldByRemark)
         if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll() }
     }
 

@@ -13,6 +13,9 @@ final class Probe {
     let port: Int
     private let timeoutMs: Int
     private var sessionMade: URLSession?
+    private var fd: Int32 = -1              // the raw tunnel of an http:// target, from `open` to `close` (2.1.1)
+    private var request = ""                // the request `open` sent, sent again by `warm`
+    private var httpsURL: String?           // an https:// target measured through URLSession, from `open` to `warm`
 
     convenience init(port: Int, timeoutSeconds: Int = 10) { self.init(port: port, timeoutMs: timeoutSeconds * 1000) }
 
@@ -50,18 +53,45 @@ final class Probe {
         return -1
     }
 
-    /// Auto's measurement of one line (AutoEngine) against `url` (the box's probe target, else the fallback): one
-    /// window for the first request — no answer within it and the line counts as failed, -1 — then the warm second
-    /// down the kept-alive connection, the smaller time kept.
+    /// One line measured against `url` (the box's probe target, else the fallback): `open` then `warm`, the warm time —
+    /// the round trip, not the handshakes —, -1 when either got no answer. Until 2.1.0 the second request went to the
+    /// inbound as a plain proxy request, which the inbound answers with a closed connection, so every reading was a cold
+    /// one and the first (cold) time was kept when the second failed.
     func measureLine(url: String = Etha.probeURL) -> Int64 {
-        if url.lowercased().hasPrefix("http://") { return rawMeasure(url) }
-        guard let first = head(url) else { return -1 }
-        if let second = head(url) { return min(first, second) }
-        return first
+        defer { close() }
+        guard open(url: url) != nil else { return -1 }
+        return warm() ?? -1
     }
 
-    /// The session's connections closed (when one was made); the probe is not used after this.
-    func invalidate() { sessionMade?.finishTasksAndInvalidate(); sessionMade = nil }
+    /// Phase one of a measurement (2.1.1): the connection through the line and the first request — the cold time, the
+    /// handshakes and all — kept open for `warm`; nil when nothing answered within the window. An `http://` target goes
+    /// through a CONNECT tunnel to the inbound on a raw socket (nothing but the loopback is touched here: the inbound
+    /// sends the bytes down its line, the box answers 204 from its own target); an `https://` one through URLSession.
+    func open(url urlString: String) -> Int64? {
+        close()
+        if urlString.lowercased().hasPrefix("http://") { return rawOpen(urlString) }
+        httpsURL = urlString
+        return head(urlString)
+    }
+
+    /// Phase two: the same request once more down the connection `open` made — the warm round trip; nil when it got no
+    /// answer (the connection is then closed).
+    func warm() -> Int64? {
+        if fd >= 0 {
+            if let ms = rawExchange(fd, request) { return ms }
+            close(); return nil
+        }
+        guard let u = httpsURL else { return nil }
+        return head(u)
+    }
+
+    /// The raw tunnel closed, when one is open.
+    func close() {
+        if fd >= 0 { Darwin.close(fd); fd = -1 }
+    }
+
+    /// The session's connections closed (when one was made) and the raw tunnel; the probe is not used after this.
+    func invalidate() { close(); sessionMade?.finishTasksAndInvalidate(); sessionMade = nil }
 
     // MARK: https — URLSession through the inbound
 
@@ -83,14 +113,13 @@ final class Probe {
 
     // MARK: http — a raw socket to the inbound
 
-    /// One TCP connection to the inbound, two absolute-form HEAD requests on it (HTTP/1.1 keeps it open), the smaller
-    /// time; -1 when the first gets no answer under 400 within the window. Nothing but the loopback is touched here:
-    /// the inbound sends the request down its line, the box answers 204 from its own target.
-    private func rawMeasure(_ urlString: String) -> Int64 {
-        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty else { return -1 }
+    /// One TCP connection to the inbound, a CONNECT tunnel to the target through it, then the first HEAD request inside
+    /// the tunnel: its time (the cold one), or nil when the tunnel or the request got no answer under 400 within the
+    /// window. The socket stays open for `warm`.
+    private func rawOpen(_ urlString: String) -> Int64? {
+        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty else { return nil }
         let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return -1 }
-        defer { close(fd) }
+        guard fd >= 0 else { return nil }
         var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32((timeoutMs % 1000) * 1000))
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
@@ -104,12 +133,15 @@ final class Probe {
         let connected = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
-        guard connected == 0 else { return -1 }
+        guard connected == 0 else { Darwin.close(fd); return nil }
         let authority = host + (url.port.map { ":\($0)" } ?? "")
+        let target = host + ":\(url.port ?? 80)"
         let path = url.path.isEmpty ? "/" : url.path
-        let request = "HEAD http://\(authority)\(path) HTTP/1.1\r\nHost: \(authority)\r\nUser-Agent: SkyRay\r\nConnection: keep-alive\r\n\r\n"
-        guard let first = rawExchange(fd, request) else { return -1 }
-        if let second = rawExchange(fd, request) { return min(first, second) }
+        let connect = "CONNECT \(target) HTTP/1.1\r\nHost: \(target)\r\nUser-Agent: SkyRay\r\n\r\n"
+        guard rawExchange(fd, connect) != nil else { Darwin.close(fd); return nil }
+        request = "HEAD \(path) HTTP/1.1\r\nHost: \(authority)\r\nUser-Agent: SkyRay\r\nConnection: keep-alive\r\n\r\n"
+        guard let first = rawExchange(fd, request) else { Darwin.close(fd); return nil }
+        self.fd = fd
         return first
     }
 

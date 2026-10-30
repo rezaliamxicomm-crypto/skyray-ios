@@ -58,4 +58,11 @@ final class LineReportTests: XCTestCase {
         let without = LineReport.build(now: now, trigger: "auto", inUseRemark: "EthaVPN-REALITY-relay-FRA4-443", switched: false, results: [("EthaVPN-REALITY-relay-FRA4-443", 200)])
         XCTAssertEqual(without, "v=1;t=1800000000;trig=auto;use=REALITY-relay-FRA4-443;sw=0;l=REALITY-relay-FRA4-443:200")
     }
+
+    func testTheConnectTimesRideAfterTheLinesOnlyForLinesNamedThere() {
+        let h = LineReport.build(now: Date(timeIntervalSince1970: 1_800_000_000), trigger: "manual", inUseRemark: "EthaVPN-REALITY-relay-FRA4-443", switched: false, results: [
+            ("EthaVPN-REALITY-relay-FRA4-443", 200), ("EthaVPN-WS-www-CleanIP1-443", -1), ("EthaVPN-XHTTP-www-CleanIP1-443", 0)],   // the third not measured
+            colds: ["EthaVPN-REALITY-relay-FRA4-443": 540, "EthaVPN-XHTTP-www-CleanIP1-443": 900, "EthaVPN-WS-www-CleanIP1-443": -1])
+        XCTAssertEqual(h, "v=1;t=1800000000;trig=manual;use=REALITY-relay-FRA4-443;sw=0;l=REALITY-relay-FRA4-443:200,WS-www-CleanIP1-443:-1;c=REALITY-relay-FRA4-443:540")
+    }
 }

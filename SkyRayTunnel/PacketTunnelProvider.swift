@@ -256,6 +256,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self = self else { return }
             let satisfied = path.status == .satisfied
             let signature = PacketTunnelProvider.signature(of: path)
+            if satisfied, signature == "other", self.networkSignature != "other" {   // the path over our own tunnel (2.1.1): no change of network
+                self.pathWasSatisfied = satisfied
+                return
+            }
             if satisfied && (!self.pathWasSatisfied || signature != self.networkSignature) {
                 self.log.info("network: \(self.networkSignature) → \(signature)\(self.pathWasSatisfied ? "" : " (back)"); measuring again in 15 s")
                 self.networkSignature = signature

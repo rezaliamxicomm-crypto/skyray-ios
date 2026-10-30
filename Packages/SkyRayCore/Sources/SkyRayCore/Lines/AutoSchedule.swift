@@ -37,12 +37,23 @@ public struct AutoSchedule: Equatable {
 
     public init() {}
 
-    /// Connect: the rotation in the order the health memory suggests, the line in use probed first, then the quick pass.
-    public mutating func start(now: Double, order: [String]) {
+    /// Connect: the rotation in the order the health memory suggests, the line in use probed first, then the quick pass —
+    /// `delay` after now (2.1.1: two seconds, the time the tunnel takes to settle).
+    public mutating func start(now: Double, order: [String], delay: Double = 0) {
         self.order = order
         cursor = 0; phase = .first; passes = 0; forced = true
+        nextProbeAt = now + delay
+        currentDueAt = now + delay
+    }
+
+    /// The phone woke with an old picture (2.1.1): the quick first pass again, now, the line in use first; the pass count
+    /// goes on.
+    public mutating func freshen(now: Double, order: [String]) {
+        self.order = order
+        cursor = 0; phase = .first; forced = true
         nextProbeAt = now
         currentDueAt = now
+        wakeDue = false
     }
 
     /// A manual test ended now (every line measured, warm): the rotation re-seeded best-first at the steady pace.
@@ -142,6 +153,7 @@ public struct AutoSchedule: Equatable {
 
     /// Wi-Fi ↔ mobile (or the path back after a gap): the trickle restarts in `settle` seconds as a quick first pass,
     /// in use or not; a second event within `debounce` seconds is the same event.
+    /// (The engine passes 5 s since 2.1.1; the default here is the old 15 s the tests pin.)
     public mutating func networkChanged(now: Double, settle: Double = 15, debounce: Double = 60) {
         if let last = lastNetworkAt, now - last < debounce { return }
         lastNetworkAt = now
