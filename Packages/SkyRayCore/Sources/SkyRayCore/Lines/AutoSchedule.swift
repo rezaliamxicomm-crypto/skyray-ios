@@ -12,6 +12,8 @@ import Foundation
 ///   - `retryAt`: a failed line is not measured again before its retry time (failedRetrySec after each failed probe).
 ///   - `fallback`: the next measurement goes to the fallback target. Never sticky: in that mode every round first
 ///     sends one probe to the box's target and comes back to it the moment it answers.
+///   - a network change is one normal round 15 s later (debounced), not a race of every line at once; traffic returning
+///     after the idle gap brings a round at once, so a phone picked up again never rides a stale pick for minutes.
 public struct AutoSchedule: Equatable {
     public enum Action: Equatable { case settle, round }
 
@@ -19,8 +21,30 @@ public struct AutoSchedule: Equatable {
     public var settleAt: Date?
     public var retryAt: [String: Date] = [:]
     public var fallback = false
+    /// the next round runs even with no traffic (a network change, a wake after idle)
+    public var forced = false
+    public var lastNetworkAt: Date?
 
     public init() {}
+
+    /// Wi-Fi ↔ mobile (or the path back after a gap): what was measured no longer holds — one normal round, every line,
+    /// `settle` seconds from now, in use or not; failed lines are free again. A second change within `debounce` seconds
+    /// of the first is one change, not a storm of rounds (iOS raises path events in bursts).
+    public mutating func networkChanged(now: Date, settle: TimeInterval = 15, debounce: TimeInterval = 60) {
+        if let last = lastNetworkAt, now.timeIntervalSince(last) < debounce { return }
+        lastNetworkAt = now
+        retryAt = [:]
+        settleAt = nil
+        forced = true
+        nextRoundAt = now.addingTimeInterval(settle)
+    }
+
+    /// Traffic returned after the idle gap: the lines are measured now, not when the old interval runs out.
+    public mutating func wake(now: Date) {
+        guard nextRoundAt != nil else { return }
+        forced = true
+        nextRoundAt = now
+    }
 
     /// A measurement ended now with these results (-1 failed): failed lines wait their retry, answered lines are free
     /// again, and the next round comes one interval after this moment.
@@ -28,6 +52,7 @@ public struct AutoSchedule: Equatable {
         for (id, ms) in results {
             if ms < 0 { retryAt[id] = now.addingTimeInterval(TimeInterval(policy.failedRetrySec)) } else { retryAt.removeValue(forKey: id) }
         }
+        forced = false
         nextRoundAt = now.addingTimeInterval(searching ? TimeInterval(policy.searchSec) : policy.jitteredRound(using: draw))
     }
 
@@ -42,7 +67,7 @@ public struct AutoSchedule: Equatable {
     /// passed and the tunnel is in use (or Searching), else nothing.
     public func action(now: Date, inUse: Bool, searching: Bool) -> Action? {
         if let s = settleAt, now >= s { return .settle }
-        if let n = nextRoundAt, now >= n, inUse || searching { return .round }
+        if let n = nextRoundAt, now >= n, inUse || searching || forced { return .round }
         return nil
     }
 
