@@ -208,7 +208,7 @@ final class AppModel: ObservableObject {
             rateOnLatency = false
             askForRating()
         }
-        if searching, !wasSearching || (lastSearchFetchAt.map { Date().timeIntervalSince($0) } ?? .infinity) >= searchFetchInterval {
+        if searching, !expired, !wasSearching || (lastSearchFetchAt.map { Date().timeIntervalSince($0) } ?? .infinity) >= searchFetchInterval {   // expired: no refetch of a 403 every few minutes
             Task { await refetchWhileSearching() }
         }
         // Auto left a dead line (2.1): one quiet fetch, so the box hears of it soon and the lines are fresh — at most one in ten minutes
@@ -292,6 +292,7 @@ final class AppModel: ObservableObject {
         } catch {
             AppLog.warn("import (\(source.rawValue)) failed: \(error)")
             banner = BannerMessage(text: importer.message(for: error), kind: .error)
+            await noteFetchFailure(error)
         }
     }
 

@@ -130,6 +130,11 @@ final class Probe {
         return first
     }
 
+    static func setReceiveTimeout(_ fd: Int32, ms: Int) {
+        var tv = timeval(tv_sec: ms / 1000, tv_usec: Int32((ms % 1000) * 1000))
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     /// One TCP connection to the inbound, its timeouts set: the descriptor, or nil.
     private func rawSocket(timeoutMs: Int) -> Int32? {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -163,7 +168,7 @@ final class Probe {
         guard let url = URL(string: urlString), let host = url.host, !host.isEmpty, wantKb > 0 else { return (0, 0, "e") }
         let want = wantKb * 1024
         let idle = max(500, idleMs)
-        guard let fd = rawSocket(timeoutMs: idle) else { return (0, elapsed(), "e") }
+        guard let fd = rawSocket(timeoutMs: 2 * idle) else { return (0, elapsed(), "e") }   // the tunnel and the head within twice the stall window
         defer { Darwin.close(fd) }
         let target = host + ":\(url.port ?? 80)"
         let authority = host + (url.port.map { ":\($0)" } ?? "")
@@ -198,6 +203,7 @@ final class Probe {
             guard parts.count >= 2, parts[0].hasPrefix("HTTP/"), let code = Int(parts[1]), code < 400 else { return (0, elapsed(), "e") }
             headDone = true
             body = head.count - end
+            Probe.setReceiveTimeout(fd, ms: idle)              // from here the bytes must keep coming: no byte for the stall window ends it
         }
         return (want / 1024, elapsed(), "f")
     }

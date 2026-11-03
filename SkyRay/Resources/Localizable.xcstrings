@@ -491,19 +491,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Expired. Renew to keep connecting."
+            "value": "Expired. Renew in the bot, then tap Refresh."
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "منقضی شده. برای ادامه تمدید کنید."
+            "value": "منقضی شده. در ربات تمدید کنید و سپس «بروزرسانی» را بزنید."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Истекла. Продлите, чтобы продолжить."
+            "value": "Истекла. Продлите в боте, затем нажмите «Обновить»."
           }
         }
       }

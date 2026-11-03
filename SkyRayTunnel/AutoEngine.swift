@@ -486,8 +486,9 @@ final class AutoEngine {
 
     /// The line failed for good within this session: its result and its memory say so (its retry backs off).
     private func condemn(_ id: String) {
+        let again = results[id] == -1                       // already held as failed this episode: one failure on the memory, not two (2.1.2)
         results[id] = -1
-        health.failed(label(id), now: AutoEngine.wall(), policy: policy)
+        if !again { health.failed(label(id), now: AutoEngine.wall(), policy: policy) }
         probedSinceReport.insert(id)
         if id == current { tellLatency() }
     }
@@ -636,7 +637,7 @@ final class AutoEngine {
     /// New connections take the line now; what is open stays where it is.
     @discardableResult
     private func switchTo(id: String, reason: String) -> Bool {
-        guard let l = line(id) else { return false }
+        guard !stopped, let l = line(id) else { return false }
         do {
             try LibXrayBridge.balancerOverride(api: "127.0.0.1:\(apiPort)", balancer: Etha.autoBalancerTag, target: XrayConfigBuilder.lineTag(id))
         } catch {
@@ -664,6 +665,7 @@ final class AutoEngine {
                 self.log.warn("auto: \(cand.remark) answers but carries nothing: no move")
                 self.condemn(cand.id)
                 if phase == .first { self.decision.firstSwitchDone = false }   // the first pass's one correction is not spent on it
+                if cur.ms < 0 { self.failover(reason: "probe", currentFailed: true) }   // the line in use had failed its probe: the next alternative, or Searching
                 return
             }
             if self.switchTo(id: target, reason: reason) {
@@ -700,7 +702,7 @@ final class AutoEngine {
             probe.invalidate()
             self.queue.async {
                 self.measuring = false
-                guard !self.stopped else { completion(nil); return }
+                guard !self.stopped else { return }                       // a stopped engine (a reload made a new one) decides nothing more
                 let pull = LineReport.Pull(label: line.label, got: r.gotKb, want: want, ms: r.ms, why: why, end: r.end)
                 self.pulls.append(pull)
                 if self.pulls.count > LineReport.maxPulls { self.pulls.removeFirst(self.pulls.count - LineReport.maxPulls) }
@@ -769,6 +771,7 @@ final class AutoEngine {
             expired = false
             store.updateTunnelState { $0.expired = nil }
             log.info("auto: the link answers again: the subscription is back")
+            samples.removeAll(); rateSamples.removeAll()          // nothing was sampled meanwhile: no stall read across the gap
             schedule.freshen(now: AutoEngine.mono(), order: order()); probesThisPass = 0
         }
         let before = hint

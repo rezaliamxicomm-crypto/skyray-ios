@@ -248,7 +248,7 @@ struct SubscriptionImporter {
         do {
             fetched = try await fetch(link)
         } catch FetchError.expired {
-            noteExpired()
+            if let stored = store.loadSnapshot()?.url, EthaLink.token(of: EthaLink.canonical(link)) == EthaLink.token(of: stored) { noteExpired() }   // the stored account's own link, not a stranger's pasted one
             throw FetchError.expired
         }
         let (info, links) = fetched
