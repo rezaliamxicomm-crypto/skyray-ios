@@ -43,7 +43,7 @@ import SkyRayXray
 ///     a HEAD and carries nothing — until 2.1.1 that was a "false alarm" and a minute's rest on the dead line), on a candidate
 ///     before any switch (w), and on the line in use when a fetch brings the box's word that it is dead for this network (h:
 ///     the phone's own evidence wins — a line that carries stays); never in the trickle; at most pullCapPerHour an hour; every
-///     pull goes into the next report (p=). A pull whose bytes stop, or that gets no answer, condemns the line like a failed
+///     pull rides the report header until a fetch has carried it to the box (p=). A pull whose bytes stop, or that gets no answer, condemns the line like a failed
 ///     probe; one that runs out of its window with bytes still coming is a slow line that carries — never condemned for its
 ///     speed, but the best alternative is pulled at once and takes over when it carries every byte within the window (a slow
 ///     alternative leaves things as they are);
@@ -103,8 +103,10 @@ final class AutoEngine {
     private var probesThisPass = 0
     private var searchSteps = 0
     private var pullTimes: [Double] = []              // when the pulls of the last hour were made: the budget (2.1.2)
-    private var pulls: [LineReport.Pull] = []         // the pulls since the last report
-    private var lastPull: (id: String, at: Double)?   // the line last pulled, and when
+    private var pulls: [LineReport.Pull] = []         // the pulls not yet carried to the box by a fetch
+    private var reportedPulls = 0                     // how many of them (the oldest) the stored report header carries
+    private var lastPull: (id: String, at: Double, carries: Bool)?   // the line last pulled, when, and whether it carried
+    private var connectPullDue = true                 // the Connect pull: once after Connect, once after a network change
     private var expired = false                       // the box said the subscription ended: nothing to look for until a fetch answers again
     private var deadPulledFor: Hint?                  // the advice the line in use was last judged against (once per advice)
 
@@ -203,6 +205,7 @@ final class AutoEngine {
         if signature != network {
             store.saveLineHealth(health, on: network)
             network = signature
+            connectPullDue = true                         // the first impression on the new network (2.1.2)
             health = store.lineHealth(on: network)
             let labels = lines.map { $0.label }
             if health.isDead(label(current)), let best = health.bestKnown(labels), let id = idOf[best], id != current {
@@ -668,6 +671,10 @@ final class AutoEngine {
                 if cur.ms < 0 { self.failover(reason: "probe", currentFailed: true) }   // the line in use had failed its probe: the next alternative, or Searching
                 return
             }
+            if p?.endLetter == "w", cur.ms >= 0 {               // a slow line wins no move by its ping (it may be the one a slow escape just left)
+                self.log.info("auto: \(cand.remark) answers faster but carries slowly: no move")
+                return
+            }
             if self.switchTo(id: target, reason: reason) {
                 self.decision.moved(now: AutoEngine.mono())
                 self.report(trigger: "auto", switched: true)
@@ -706,7 +713,7 @@ final class AutoEngine {
                 let pull = LineReport.Pull(label: line.label, got: r.gotKb, want: want, ms: r.ms, why: why, end: r.end)
                 self.pulls.append(pull)
                 if self.pulls.count > LineReport.maxPulls { self.pulls.removeFirst(self.pulls.count - LineReport.maxPulls) }
-                self.lastPull = (line.id, AutoEngine.mono())
+                self.lastPull = (line.id, AutoEngine.mono(), pull.carries)
                 let verdict: String
                 switch pull.endLetter {
                 case "f": verdict = "it carries"
@@ -749,6 +756,8 @@ final class AutoEngine {
     /// Connect: the line the first pass picked is pulled once — a line pulled on its way in (the first pass's correction) is not pulled
     /// again; one that carries nothing is left for the best alternative, which is pulled before the move.
     private func connectPull() {
+        guard connectPullDue else { return }              // a wake runs the first pass again; the pull is once per Connect and per network change
+        connectPullDue = false
         guard let cur = line(current) else { return }
         if let lp = lastPull, lp.id == current, AutoEngine.mono() - lp.at < AutoEngine.pullFresh { return }
         pull(cur, why: "c") { [weak self] p in
@@ -767,6 +776,10 @@ final class AutoEngine {
     /// in use the box now calls dead for this network is pulled — the phone's own evidence wins: a line that carries stays — and
     /// left for a live one when it carries nothing; a subscription the box had called ended is back.
     func onFetched() {
+        if store.tunnelState.lineReport == nil {              // the fetch spent the header: the pulls it carried are delivered
+            pulls.removeFirst(min(reportedPulls, pulls.count))
+            reportedPulls = 0
+        }
         if expired {
             expired = false
             store.updateTunnelState { $0.expired = nil }
@@ -780,6 +793,7 @@ final class AutoEngine {
         let mine = label(current)
         guard advice.dead.contains(mine), !(advice == before && deadPulledFor == advice) else { return }
         deadPulledFor = advice
+        if let lp = lastPull, lp.id == current, AutoEngine.mono() - lp.at < AutoEngine.pullFresh { return }   // judged seconds ago (a failover's fetch follows its pull)
         guard let cur = line(current) else { return }
         let labels = lines.map { $0.label }
         guard labels.contains(where: { $0 != mine && !health.isDead($0) && !advice.dead.contains($0) }) else { return }   // nowhere better to go
@@ -821,7 +835,7 @@ final class AutoEngine {
         let header = LineReport.build(now: Date(), trigger: trigger, inUseRemark: inUse, switched: switched,
                                       results: lines.map { ($0.remark, probedSinceReport.contains($0.id) ? (results[$0.id] ?? 0) : 0) }, rateKbps: passRateKbps,
                                       colds: coldByRemark, pulls: pulled)
-        if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll(); pulls.removeFirst(min(pulled.count, pulls.count)) }
+        if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll(); reportedPulls = pulled.count }   // the header is replaced at every pass end: the pulls stay until a fetch has carried one (onFetched)
     }
 
     /// The box's latest advice (the app's refetch while searching brings a fresh hint): the outage flag follows it.

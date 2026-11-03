@@ -153,7 +153,7 @@ final class AppModel: ObservableObject {
                 _ = await ClipboardImport.attempt(model: self)
             }
         }
-        if let s = snapshot, SubscriptionHeaders.isStale(s.fetchedAt) {
+        if let s = snapshot, SubscriptionHeaders.isStale(s.fetchedAt) || SubscriptionHeaders.daysLeft(expire: s.info.expire) == 0 {   // an ended card is refreshed on every open: a renewal is the same link (2.1.2)
             await refreshQuietly(reason: "stale on open")
         }
         await pollStatus()
