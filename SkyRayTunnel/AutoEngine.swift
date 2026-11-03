@@ -37,6 +37,16 @@ import SkyRayXray
 ///     the box (TunnelState.lineReport, the header X-Etha-Lines) with the best five-second download rate seen on the
 ///     line in use during the pass — the passive throughput figure the box's ranking folds in.
 ///
+///   - the pull (2.1.2): a line is judged by bytes where a ping would lie — pullKb KB of the box's blob through the line
+///     (Probe.pull: a Range request inside a CONNECT tunnel to the line's inbound), at Connect on the line the first pass
+///     picked (c), when the stall watch fired and the line's HEAD still passed (s: a line the network has soft-killed answers
+///     a HEAD and carries nothing — until 2.1.1 that was a "false alarm" and a minute's rest on the dead line), on a candidate
+///     before any switch (w), and on the line in use when a fetch brings the box's word that it is dead for this network (h:
+///     the phone's own evidence wins — a line that carries stays); never in the trickle; at most pullCapPerHour an hour; every
+///     pull goes into the next report (p=); a pull that fails condemns the line like a failed probe;
+///   - the box's word that the subscription ended (a signed 403 on the app's fetch, onExpired): nothing is probed until a
+///     fetch answers again (onFetched; a renewal is the same link), the state says "expired".
+///
 /// Nobody picks a line by hand any more (2.0.0): the customer sees no line name, only the latency.
 /// All state lives on the provider's queue; the measurements themselves run off it and come back to it.
 final class AutoEngine {
@@ -89,6 +99,11 @@ final class AutoEngine {
     private var probedSinceReport = Set<String>()
     private var probesThisPass = 0
     private var searchSteps = 0
+    private var pullTimes: [Double] = []              // when the pulls of the last hour were made: the budget (2.1.2)
+    private var pulls: [LineReport.Pull] = []         // the pulls since the last report
+    private var lastPull: (id: String, at: Double)?   // the line last pulled, and when
+    private var expired = false                       // the box said the subscription ended: nothing to look for until a fetch answers again
+    private var deadPulledFor: Hint?                  // the advice the line in use was last judged against (once per advice)
 
     private static let tick: TimeInterval = 1
     private static let samplesKept = 32
@@ -104,6 +119,8 @@ final class AutoEngine {
     private static let rateWindow: Double = 5
     private static let rateMinBytes: Int64 = 256 * 1024
     private static let firstPassTimeoutSec = 3
+    private static let pullHour: Double = 3600           // the pull budget's window (2.1.2)
+    private static let pullFresh: Double = 60            // a line pulled within this is not pulled again at Connect
 
     init(queue: DispatchQueue, store: SkyRayStore, log: RingLog, lines: [Line], policy: AutoPolicy, apiPort: Int, current: String,
          network: String, hint: Hint?, traffic: @escaping () -> (up: Int64, down: Int64), onSwitch: @escaping (Line, String) -> Void) {
@@ -237,7 +254,7 @@ final class AutoEngine {
     // MARK: the loop
 
     private func tickNow() {
-        guard !paused, !stopped else { return }
+        guard !paused, !stopped, !expired else { return }   // expired: nothing to look for until the link answers again (2.1.2)
         let now = AutoEngine.mono()
         sample(now)
         guard !measuring else { return }
@@ -356,6 +373,7 @@ final class AutoEngine {
         probesThisPass = 0
         lastPassWall = Date()
         store.saveLineHealth(health, on: network)
+        if first { connectPull() }
     }
 
     /// The line in use's own probe (every currentSec while the app is on screen, and once when traffic returns): its
@@ -387,7 +405,7 @@ final class AutoEngine {
     /// line in use answering: nothing moves, the alarm rests a minute. It failing and the alternative answering: new
     /// connections move at once, and only then is the old line held as failed. The alternative failing too: the next,
     /// once more; nothing answering: Searching. The short window itself condemns nobody — answers are kept, failures not.
-    private func failover(reason: String, tried: Set<String> = [], attempt: Int = 1) {
+    private func failover(reason: String, tried: Set<String> = [], attempt: Int = 1, currentFailed: Bool = false) {
         guard let cur = line(current), !measuring else { return }
         let labels = lines.map { $0.label }
         let mine = label(current)
@@ -396,37 +414,67 @@ final class AutoEngine {
             ?? (hint?.arrange(labels) ?? labels).first { !excluded.contains($0) && !health.isDead($0) && !(hint?.dead.contains($0) ?? false) }
             ?? (hint?.arrange(labels) ?? labels).first { !excluded.contains($0) }
         let alt = altLabel.flatMap { idOf[$0] }.flatMap { line($0) }
-        var which = [cur]
+        var which: [Line] = currentFailed ? [] : [cur]   // the line in use already known not to carry (a failed pull): not probed again
         if let a = alt { which.append(a) }
+        if which.isEmpty { condemn(cur.id); updateSearching(force: true); return }
         measuring = true
         measureOnce(which, concurrency: which.count, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.failoverMs) { [weak self] out in
             guard let self = self else { return }
             self.record(out, which: which, condemn: false)      // a 1.5-s window: answers count, failures do not
             self.measuring = false
-            if (out[cur.id] ?? -1) > 0 {
-                self.stallQuietUntil = AutoEngine.mono() + AutoEngine.stallFalseAlarmRest
-                self.log.info("auto: \(cur.remark) answers within \(self.policy.failoverMs) ms (\(reason)): staying")
+            if !currentFailed, (out[cur.id] ?? -1) > 0 {
+                // the line in use answers its HEAD; after a stall that is not the whole story — a line the network has soft-killed
+                // answers a HEAD and carries nothing (2.1.2): the pull is the second opinion, and only a pull that fails lets the
+                // failover go on
+                guard reason == "stall" else { self.stay(cur, reason: reason); return }
+                self.pull(cur, why: "s") { [weak self] ok in
+                    guard let self = self else { return }
+                    guard ok == false else { self.stay(cur, reason: reason); return }
+                    self.log.warn("auto: \(cur.remark) answers but carries nothing: the stall is real")
+                    self.failoverProceed(reason: reason, cur: cur, alt: alt, out: out, tried: tried, attempt: attempt, currentFailed: true)
+                }
                 return
             }
-            if let a = alt, (out[a.id] ?? -1) > 0 {
+            self.failoverProceed(reason: reason, cur: cur, alt: alt, out: out, tried: tried, attempt: attempt, currentFailed: currentFailed)
+        }
+    }
+
+    private func stay(_ cur: Line, reason: String) {
+        stallQuietUntil = AutoEngine.mono() + AutoEngine.stallFalseAlarmRest
+        log.info("auto: \(cur.remark) answers within \(policy.failoverMs) ms (\(reason)): staying")
+    }
+
+    /// The failover once the line in use is known not to carry: the alternative that answered is pulled before the move (2.1.2); one
+    /// that carries nothing is condemned and the next tried, once more; nothing left: Searching.
+    private func failoverProceed(reason: String, cur: Line, alt: Line?, out: [String: Int64], tried: Set<String>, attempt: Int, currentFailed: Bool) {
+        if let a = alt, (out[a.id] ?? -1) > 0 {
+            pull(a, why: "w") { [weak self] ok in
+                guard let self = self else { return }
+                if ok == false {                                 // the candidate answers but carries nothing: not it, the next one
+                    self.condemn(a.id)
+                    if attempt < 2 { self.failover(reason: reason, tried: tried.union([a.label]), attempt: attempt + 1, currentFailed: currentFailed); return }
+                    self.condemn(cur.id)
+                    self.updateSearching(force: true)
+                    return
+                }
                 self.condemn(cur.id)
                 self.switchTo(id: a.id, reason: "failover after \(reason)")
                 self.decision.moved(now: AutoEngine.mono())
                 self.report(trigger: "failover", switched: true)
                 self.store.updateTunnelState { $0.failoverAt = Date() }
                 self.store.saveLineHealth(self.health, on: self.network)
-                return
             }
-            var next = tried
-            if let a = alt { next.insert(a.label) }
-            if attempt < 2, alt != nil {
-                self.failover(reason: reason, tried: next, attempt: attempt + 1)
-                return
-            }
-            // nothing answered the line in use nor two alternatives: the line in use is held as failed and Searching decides
-            self.condemn(cur.id)
-            self.updateSearching(force: true)
+            return
         }
+        var next = tried
+        if let a = alt { next.insert(a.label) }
+        if attempt < 2, alt != nil {
+            failover(reason: reason, tried: next, attempt: attempt + 1, currentFailed: currentFailed)
+            return
+        }
+        // nothing answered the line in use nor two alternatives: the line in use is held as failed and Searching decides
+        condemn(cur.id)
+        updateSearching(force: true)
     }
 
     /// The line failed for good within this session: its result and its memory say so (its retry backs off).
@@ -600,7 +648,114 @@ final class AutoEngine {
         let candidates = lines.map { AutoDecision.Candidate(id: $0.id, ms: results[$0.id] ?? 0, order: $0.order) }
         guard let cur = candidates.first(where: { $0.id == current }) else { return false }
         guard let target = decision.target(now: AutoEngine.mono(), phase: phase, current: cur, candidates: candidates, policy: policy) else { return false }
-        return switchTo(id: target, reason: reason)
+        // the candidate is pulled before the move (2.1.2): a line that answers but carries nothing is condemned instead, and the move,
+        // when it comes, is reported on its own; with no pull to make (the budget spent, the pull off) the move is now, as before
+        guard let cand = line(target), !measuring, pullAllowed(AutoEngine.mono()) else { return switchTo(id: target, reason: reason) }
+        pull(cand, why: "w") { [weak self] ok in
+            guard let self = self else { return }
+            if ok == false {
+                self.log.warn("auto: \(cand.remark) answers but carries nothing: no move")
+                self.condemn(cand.id)
+                return
+            }
+            if self.switchTo(id: target, reason: reason) {
+                self.decision.moved(now: AutoEngine.mono())
+                self.report(trigger: "auto", switched: true)
+            }
+        }
+        return false
+    }
+
+    // MARK: the pull (2.1.2)
+
+    /// The budget: at most pullCapPerHour pulls in any hour; none while the policy says 0 or the probes run against the fallback
+    /// (the blob is the box's).
+    private func pullAllowed(_ now: Double) -> Bool {
+        if policy.pullKb <= 0 || policy.pullCapPerHour <= 0 || schedule.fallback { return false }
+        pullTimes.removeAll { now - $0 > AutoEngine.pullHour }
+        return pullTimes.count < policy.pullCapPerHour
+    }
+
+    /// pullKb KB of the box's blob through the line (Probe.pull): true when every byte came, false when the line answers but carries
+    /// nothing — or too slowly (pullWinSec) —, nil when no pull was made (the budget spent, the pull off, something else measuring).
+    /// Every pull goes into the next report. Off the queue, back on it; `measuring` holds the trickle meanwhile.
+    private func pull(_ line: Line, why: String, completion: @escaping (Bool?) -> Void) {
+        let now = AutoEngine.mono()
+        guard !stopped, !measuring, pullAllowed(now) else { completion(nil); return }
+        pullTimes.append(now)
+        measuring = true
+        let want = policy.pullKb, winMs = policy.pullWinSec * 1000, idleMs = policy.stallSec * 1000
+        measureQueue.async {
+            let probe = Probe(port: line.probePort, timeoutMs: winMs)
+            let r = probe.pull(url: Etha.pullURL, wantKb: want, winMs: winMs, idleMs: idleMs)
+            probe.invalidate()
+            self.queue.async {
+                self.measuring = false
+                guard !self.stopped else { completion(nil); return }
+                let ok = r.gotKb >= want
+                self.pulls.append(LineReport.Pull(label: line.label, got: r.gotKb, want: want, ms: r.ms, why: why))
+                if self.pulls.count > LineReport.maxPulls { self.pulls.removeFirst(self.pulls.count - LineReport.maxPulls) }
+                self.lastPull = (line.id, AutoEngine.mono())
+                self.log.info("auto: pulled \(r.gotKb) of \(want) KB through \(line.remark) in \(r.ms) ms (\(why)): \(ok ? "it carries" : "it answers but carries nothing")")
+                completion(ok)
+            }
+        }
+    }
+
+    /// Connect: the line the first pass picked is pulled once — a line pulled on its way in (the first pass's correction) is not pulled
+    /// again; one that carries nothing is left for the best alternative, which is pulled before the move.
+    private func connectPull() {
+        guard let cur = line(current) else { return }
+        if let lp = lastPull, lp.id == current, AutoEngine.mono() - lp.at < AutoEngine.pullFresh { return }
+        pull(cur, why: "c") { [weak self] ok in
+            guard let self = self, ok == false else { return }
+            self.log.warn("auto: \(cur.remark) answers but carries nothing right after Connect: leaving it")
+            self.condemn(cur.id)
+            self.failover(reason: "pull", currentFailed: true)
+        }
+    }
+
+    /// Our link answered (the app's fetch: on open, hourly, after a failover, while searching): the box's advice is fresh. The line
+    /// in use the box now calls dead for this network is pulled — the phone's own evidence wins: a line that carries stays — and
+    /// left for a live one when it carries nothing; a subscription the box had called ended is back.
+    func onFetched() {
+        if expired {
+            expired = false
+            store.updateTunnelState { $0.expired = nil }
+            log.info("auto: the link answers again: the subscription is back")
+            schedule.freshen(now: AutoEngine.mono(), order: order()); probesThisPass = 0
+        }
+        let before = hint
+        refreshHint()
+        guard let advice = hint, !searching, !schedule.fallback, !measuring else { return }
+        let mine = label(current)
+        guard advice.dead.contains(mine), !(advice == before && deadPulledFor == advice) else { return }
+        deadPulledFor = advice
+        guard let cur = line(current) else { return }
+        let labels = lines.map { $0.label }
+        guard labels.contains(where: { $0 != mine && !health.isDead($0) && !advice.dead.contains($0) }) else { return }   // nowhere better to go
+        pull(cur, why: "h") { [weak self] ok in
+            guard let self = self else { return }
+            switch ok {
+            case false?:
+                self.log.warn("auto: the box calls \(cur.remark) dead on this network and it carries nothing: leaving it")
+                self.condemn(cur.id)
+                self.failover(reason: "hint", currentFailed: true)
+            case true?:
+                self.log.info("auto: the box calls \(cur.remark) dead on this network but it carries: staying")
+            default:
+                break
+            }
+        }
+    }
+
+    /// The box's word that the subscription ended (a signed 403 on the app's fetch): nothing is probed until a fetch answers again
+    /// (the app refreshes on its own; a renewal is the same link); the state says so.
+    func onExpired() {
+        guard !expired else { return }
+        expired = true
+        store.updateTunnelState { $0.expired = true }
+        log.warn("auto: the box says the subscription ended; nothing to look for until the link answers again")
     }
 
     /// The line in use's time to the App Group: the app's chip.
@@ -616,10 +771,11 @@ final class AutoEngine {
         let inUse = line(current)?.remark
         var coldByRemark: [String: Int64] = [:]
         for l in lines where probedSinceReport.contains(l.id) { if let c = colds[l.id], c > 0 { coldByRemark[l.remark] = c } }
+        let pulled = pulls
         let header = LineReport.build(now: Date(), trigger: trigger, inUseRemark: inUse, switched: switched,
                                       results: lines.map { ($0.remark, probedSinceReport.contains($0.id) ? (results[$0.id] ?? 0) : 0) }, rateKbps: passRateKbps,
-                                      colds: coldByRemark)
-        if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll() }
+                                      colds: coldByRemark, pulls: pulled)
+        if let h = header { store.updateTunnelState { $0.lineReport = h }; probedSinceReport.removeAll(); pulls.removeFirst(min(pulled.count, pulls.count)) }
     }
 
     /// The box's latest advice (the app's refetch while searching brings a fresh hint): the outage flag follows it.

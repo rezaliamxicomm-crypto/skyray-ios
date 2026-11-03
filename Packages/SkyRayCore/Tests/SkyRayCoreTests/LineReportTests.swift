@@ -59,6 +59,24 @@ final class LineReportTests: XCTestCase {
         XCTAssertEqual(without, "v=1;t=1800000000;trig=auto;use=REALITY-relay-FRA4-443;sw=0;l=REALITY-relay-FRA4-443:200")
     }
 
+    func testThePullsRideAfterTheConnectTimes() {
+        let h = LineReport.build(now: Date(timeIntervalSince1970: 1_761_770_000), trigger: "stall", inUseRemark: "EthaVPN-REALITY-relay-FRA9-443", switched: false,
+                                 results: [("EthaVPN-REALITY-relay-FRA9-443", 160)],
+                                 pulls: [LineReport.Pull(label: "REALITY-relay-FRA9-443", got: 128, want: 128, ms: 940, why: "c"),
+                                         LineReport.Pull(label: "REALITY-relay-FRA3-443", got: 12, want: 128, ms: 5000, why: "s"),
+                                         LineReport.Pull(label: "bad label", got: 1, want: 1, ms: 1, why: "w"),
+                                         LineReport.Pull(label: "REALITY-relay-FRA5-443", got: -3, want: 64, ms: 10, why: "")])
+        XCTAssertEqual(h, "v=1;t=1761770000;trig=stall;use=REALITY-relay-FRA9-443;sw=0;l=REALITY-relay-FRA9-443:160;" +
+                       "p=REALITY-relay-FRA9-443:128/128/940/c,REALITY-relay-FRA3-443:12/128/5000/s,REALITY-relay-FRA5-443:0/64/10/o")
+        let many = (1...40).map { LineReport.Pull(label: "L\($0)-1-x-443", got: 1, want: 1, ms: 1, why: "w") }
+        let tail = LineReport.build(now: Date(timeIntervalSince1970: 0), trigger: "auto", inUseRemark: nil, switched: false, results: [("EthaVPN-A-1-x-443", 5)], pulls: many)!
+            .components(separatedBy: "p=")[1].split(separator: ",")
+        XCTAssertEqual(tail.count, LineReport.maxPulls)
+        XCTAssertTrue(tail.last!.hasPrefix("L40-1-x-443:"))   // the newest kept
+        XCTAssertEqual(LineReport.build(now: Date(timeIntervalSince1970: 0), trigger: "auto", inUseRemark: nil, switched: false, results: [("EthaVPN-A-1-x-443", 5)]),
+                       "v=1;t=0;trig=auto;use=;sw=0;l=A-1-x-443:5")   // none: as before
+    }
+
     func testTheConnectTimesRideAfterTheLinesOnlyForLinesNamedThere() {
         let h = LineReport.build(now: Date(timeIntervalSince1970: 1_800_000_000), trigger: "manual", inUseRemark: "EthaVPN-REALITY-relay-FRA4-443", switched: false, results: [
             ("EthaVPN-REALITY-relay-FRA4-443", 200), ("EthaVPN-WS-www-CleanIP1-443", -1), ("EthaVPN-XHTTP-www-CleanIP1-443", 0)],   // the third not measured

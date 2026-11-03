@@ -32,6 +32,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var testing = false
     /// Auto found no line answering (the extension's state): the Searching state.
     @Published private(set) var searching = false
+    /// The box said the subscription ended (the extension's state, 2.1.2): Expired, and Renew is the way.
+    @Published private(set) var expired = false
     /// The line in use's last time (ms, -1 failed, 0 none yet) and when it was measured.
     @Published private(set) var latencyMs: Int64 = 0
     @Published private(set) var latencyAt: Date?
@@ -54,6 +56,7 @@ final class AppModel: ObservableObject {
         self.store = store
         self.vpn = VPNController()
         self.importer = SubscriptionImporter(store: store)
+        self.importer.deviceCode = DeviceCode.make(id: UIDevice.current.identifierForVendor?.uuidString, bundle: Bundle.main.bundleIdentifier ?? "")   // this phone as a code (2.1.2)
         AppLog.shared = RingLog(url: store.appLogURL)
         reload()
         vpn.$status
@@ -95,7 +98,7 @@ final class AppModel: ObservableObject {
         // Connected the moment the tunnel is up: traffic flows. The chip under it says "Connecting…" until the first
         // measurement is in (the operator's wording), then the number — or "no answer yet" when the line in use failed its
         // probe (2.0.2 kept saying Connecting… in that case, which read as nothing happening).
-        case .connected: return L(searching ? "state.searching" : "state.connected")
+        case .connected: return L(expired ? "state.expired" : searching ? "state.searching" : "state.connected")
         case .connecting, .reasserting: return L("state.connecting")
         case .disconnecting: return L("state.disconnecting")
         default: return L("state.notconnected")
@@ -106,6 +109,7 @@ final class AppModel: ObservableObject {
 
     /// Under the buttons: what to do while no line answers, else what the last test did; nil = nothing.
     var outcomeText: String? {
+        if isConnected, expired { return L("expired.hint") }   // the box's word that the subscription ended (2.1.2)
         if isConnected, searching { return L(tunnel?.outage == true ? "lines.blocked" : "searching.hint") }   // the box's word when every phone of the network fails
         return outcomeKey.map { L($0) }
     }
@@ -198,6 +202,7 @@ final class AppModel: ObservableObject {
         if let ms = reply.latencyMs, let at = reply.latencyAt { latencyMs = ms; latencyAt = at }   // nil until the extension measured
         let wasSearching = searching
         searching = reply.searching ?? false
+        expired = reply.expired ?? false
         if searching { outcomeKey = nil }
         if rateOnLatency, latencyMs > 0, let at = latencyAt, Date().timeIntervalSince(at) < 60 {
             rateOnLatency = false
@@ -304,6 +309,7 @@ final class AppModel: ObservableObject {
             return true
         } catch {
             AppLog.warn("quiet refresh (\(reason)) failed: \(error)")
+            await noteFetchFailure(error)
             return false
         }
     }
@@ -319,6 +325,7 @@ final class AppModel: ObservableObject {
             banner = BannerMessage(text: L("refreshed"), kind: .ok)
         } catch {
             banner = BannerMessage(text: importer.message(for: error), kind: .error)
+            await noteFetchFailure(error)
         }
     }
 
@@ -334,6 +341,15 @@ final class AppModel: ObservableObject {
                 await pollStatus()
             }
         }
+        if vpn.isActive { _ = await vpn.send(.fetched); await pollStatus() }   // the engine reads the fresh advice; an expired subscription is back (2.1.2)
+    }
+
+    /// A fetch that ended with the box's word that the subscription ended (a signed 403, 2.1.2): the card re-read (the importer set
+    /// its expiry), the running tunnel told — its engine stops looking and the screen says Expired.
+    private func noteFetchFailure(_ error: Error) async {
+        guard case .expired? = error as? FetchError else { return }
+        reload()
+        if vpn.isActive { _ = await vpn.send(.expired); await pollStatus() }
     }
 
     // MARK: connecting

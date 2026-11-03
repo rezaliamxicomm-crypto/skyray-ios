@@ -4,7 +4,7 @@ import Foundation
 /// line of the subscription behind one balancer; the extension measures the lines through that core (AutoEngine) and
 /// holds the balancer to the best, so a change of line moves new connections only and cuts nothing that is open. The
 /// numbers here are the policy's defaults; the service's header X-Etha-Auto ("round=180,failed=900,idle=600,
-/// margin=15,floor=25,stall=4,timeout=5,conc=8,fresh=600,search=60,sfetch=300,pace=1,cur=30,jitter=10,dwell=90,persist=2,cap=7200,warm=20,fover=1500") replaces any of them on the next
+/// margin=15,floor=25,stall=4,timeout=5,conc=8,fresh=600,search=60,sfetch=300,pace=1,cur=30,jitter=10,dwell=90,persist=2,cap=7200,warm=20,fover=1500,pull=128,pullcap=6,pullwin=15") replaces any of them on the next
 /// fetch, so they change without a release.
 public struct AutoPolicy: Equatable, Codable {
     /// every line measured once in this long, one probe at a time (the trickle), while the tunnel is in use
@@ -49,6 +49,13 @@ public struct AutoPolicy: Equatable, Codable {
     public var warmSec: Int = 20
     /// the window of the failover probes (the line in use and the best alternative together): a dead line is left within it
     public var failoverMs: Int = 1500
+    /// the pull (2.1.2): this many KB of the box's blob through a line — at Connect, on a stall whose HEAD passes, before a switch,
+    /// when the box calls the line in use dead; a line that answers a HEAD and carries nothing fails it; 0 = never
+    public var pullKb: Int = 128
+    /// at most this many pulls in any hour
+    public var pullCapPerHour: Int = 6
+    /// a pull that has not finished within this long counts as not carrying
+    public var pullWinSec: Int = 15
 
     public init() {}
     public init(roundSec: Int, failedRetrySec: Int, idleSec: Int, marginPct: Int, floorMs: Int, stallSec: Int,
@@ -136,6 +143,9 @@ public struct AutoPolicy: Equatable, Codable {
             case "cap": p.retryCapSec = min(max(v, 60), 86400)
             case "warm": p.warmSec = min(max(v, 5), 600)
             case "fover": p.failoverMs = min(max(v, 500), 10000)
+            case "pull": p.pullKb = min(max(v, 0), 256)
+            case "pullcap": p.pullCapPerHour = min(max(v, 0), 60)
+            case "pullwin": p.pullWinSec = min(max(v, 5), 60)
             default: break
             }
         }

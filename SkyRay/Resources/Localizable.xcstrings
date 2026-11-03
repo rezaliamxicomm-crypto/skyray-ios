@@ -485,6 +485,29 @@
         }
       }
     },
+    "expired.hint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expired. Renew to keep connecting."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "منقضی شده. برای ادامه تمدید کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Истекла. Продлите, чтобы продолжить."
+          }
+        }
+      }
+    },
     "expired": {
       "extractionState": "manual",
       "localizations": {
@@ -1982,6 +2005,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверка…"
+          }
+        }
+      }
+    },
+    "state.expired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscription expired"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اشتراک تمام شده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подписка истекла"
           }
         }
       }

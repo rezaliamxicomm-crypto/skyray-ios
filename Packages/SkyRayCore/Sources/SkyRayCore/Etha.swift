@@ -62,6 +62,8 @@ public enum Etha {
     public static let probeFallbackURL = "https://www.gstatic.com/generate_204"
     /// What Auto measured, sent on the next subscription fetch as this header (LineReport); the box stores it.
     public static let linesHeader = "X-Etha-Lines"
+    public static let deviceHeader = "X-Etha-Device"             // this phone as a code on every fetch of our link (DeviceCode: a hash, never the id); the box counts the phones a link is on (2.1.2)
+    public static let pullURL = "http://203.0.113.1/blob/256k"   // the pull (2.1.2): a Range of the box's blob through one line, the bytes counted — the second opinion a HEAD cannot give
     /// The hop starts this long after the two ECH ways on a fetch — at once on a network where it answered last time.
     public static let hopHeadStartMs: Int64 = 3_000
     public static let pingTimeoutSeconds = 8

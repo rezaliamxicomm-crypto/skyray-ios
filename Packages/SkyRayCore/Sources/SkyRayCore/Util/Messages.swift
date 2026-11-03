@@ -2,12 +2,14 @@ import Foundation
 
 /// App → tunnel requests (sendProviderMessage) and the tunnel's replies, as JSON.
 public struct TunnelRequest: Codable, Equatable {
-    public var cmd: String            // status | probe | ping | reload | logTail (switch: an older app's pick, ignored since 2.0.0)
+    public var cmd: String            // status | probe | ping | reload | logTail | fetched | expired (switch: an older app's pick, ignored since 2.0.0)
     public var lineId: String?
     public var lines: Int?
     public init(cmd: String, lineId: String? = nil, lines: Int? = nil) { self.cmd = cmd; self.lineId = lineId; self.lines = lines }
     public static let status = TunnelRequest(cmd: "status")
     public static let probe = TunnelRequest(cmd: "probe")   // the same as ping since 2.0.0 (the extension measures every line, never one)
+    public static let fetched = TunnelRequest(cmd: "fetched")   // our link answered (2.1.2): the engine reads the fresh advice
+    public static let expired = TunnelRequest(cmd: "expired")   // the box said the subscription ended (2.1.2): the engine stops looking
     public static func switchTo(_ id: String) -> TunnelRequest { TunnelRequest(cmd: "switch", lineId: id) }
     /// Every line measured through the running core now, and the best taken by Auto's rules (AutoEngine).
     public static let ping = TunnelRequest(cmd: "ping")
@@ -33,6 +35,7 @@ public struct TunnelReply: Codable, Equatable {
     public var searching: Bool?           // no line answers; Auto keeps measuring (2.0.0)
     public var outage: Bool?              // the box says this network blocks every line right now (2.1): the text under Searching
     public var failoverAt: Date?          // Auto last left a dead line then (2.1): the app fetches once, quietly
+    public var expired: Bool?             // the box said the subscription ended (2.1.2): the screen says Expired, Renew is the way
     public var latencyMs: Int64?          // the line in use's last time, -1 failed
     public var latencyAt: Date?
     public var outcome: String?           // of a "ping": switched | kept | none

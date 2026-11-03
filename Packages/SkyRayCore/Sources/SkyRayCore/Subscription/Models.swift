@@ -80,5 +80,6 @@ public struct TunnelState: Codable, Equatable {
     public var lineReport: String?        // what Auto measured last (LineReport), for the next fetch; cleared once sent
     public var outage: Bool?              // the box says every phone of this network fails on every line (the hint's out=1): "it is not you"
     public var failoverAt: Date?          // Auto last left a dead line then (the app's quiet fetch follows)
+    public var expired: Bool?             // the box said the subscription ended (a signed 403 on a fetch, 2.1.2): Auto looks for nothing until a fetch answers again
     public init() {}
 }

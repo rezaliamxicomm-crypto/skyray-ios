@@ -77,7 +77,8 @@ struct SubscriptionImporter {
         let snapshot = store.loadSnapshot()
         let stored = EchFetch.storedAddresses(lines: snapshot?.lines ?? [], selectedLineId: store.selection.selectedLineId)
         let report = store.tunnelState.lineReport ?? ""
-        let headers: [String: String] = report.isEmpty ? [:] : [Etha.linesHeader: report]
+        var headers: [String: String] = report.isEmpty ? [:] : [Etha.linesHeader: report]
+        if let code = deviceCode { headers[Etha.deviceHeader] = code }   // this phone as a code, on every way of the fetch (2.1.2)
         let tunnelUp = NetworkInterfaces.tunnelIsUp()
         let network = Self.networkSignature()
         let known = EchFetch.parseHops(snapshot?.info.linkHops)
@@ -228,9 +229,29 @@ struct SubscriptionImporter {
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// This phone as a code for the box (DeviceCode, 2.1.2): set by the app on the main actor, sent on every fetch of our link.
+    var deviceCode: String?
+
+    /// The box's own word that the subscription ended (a signed 403, 2.1.2): the stored info says so at once — the expiry set to the
+    /// past; a renewal's fetch sets it right (the same link) — so the account card reads «Expired», and the app tells the tunnel.
+    private func noteExpired() {
+        guard var snapshot = store.loadSnapshot() else { return }
+        snapshot.info.expire = Int64(Date().timeIntervalSince1970) - 1
+        snapshot.info.infoUpdated = Date()
+        store.saveSnapshot(snapshot)
+        store.lastRefreshAttempt = Date()
+    }
+
     @discardableResult
     func fetchAndStore(link: String) async throws -> SubscriptionSnapshot {
-        let (info, links) = try await fetch(link)
+        let fetched: (info: SubscriptionInfo, links: [String])
+        do {
+            fetched = try await fetch(link)
+        } catch FetchError.expired {
+            noteExpired()
+            throw FetchError.expired
+        }
+        let (info, links) = fetched
         let lines = await buildLines(links)
         guard !lines.isEmpty else { throw FetchError.noLines }
         let name = EthaLink.name(of: link)

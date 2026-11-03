@@ -72,7 +72,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                         self.startHev()
                         let version = LibXrayBridge.xrayVersion()
                         self.store.updateTunnelState { $0.startedAt = Date(); $0.xrayVersion = version; $0.results = nil; $0.lastRoundAt = nil
-                                                       $0.searching = nil; $0.outage = nil; $0.failoverAt = nil; $0.latencyMs = nil; $0.latencyAt = nil }
+                                                       $0.searching = nil; $0.outage = nil; $0.failoverAt = nil; $0.latencyMs = nil; $0.latencyAt = nil; $0.expired = nil }
                         self.log.info("tunnel up: xray \(version), fd \(fd), socks \(self.socksPort), api \(self.apiPort)")
                         self.startEngine(on: line, policy: AutoPolicy.parse(snapshot.info.autoPolicy), hint: Hint.parse(snapshot.info.hint))
                         self.startMemoryLog()
@@ -217,7 +217,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         reasserting = false
-        store.updateTunnelState { $0.results = nil; $0.lastRoundAt = nil; $0.searching = nil }
+        store.updateTunnelState { $0.results = nil; $0.lastRoundAt = nil; $0.searching = nil; $0.expired = nil }
         startEngine(on: keep, policy: AutoPolicy.parse(snapshot.info.autoPolicy), hint: Hint.parse(snapshot.info.hint))
         log.info("reload: xray restarted on \(fresh.count) lines, on \(keep.remark)")
     }
@@ -316,6 +316,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             case "reload":
                 self.reloadLines()
                 answer()
+            case "fetched":    // our link answered (2.1.2): the fresh advice is read, a line the box calls dead is checked with a pull
+                self.engine?.onFetched()
+                answer()
+            case "expired":    // the box said the subscription ended (2.1.2): nothing to look for until the link answers again
+                self.engine?.onExpired()
+                answer()
             case "logTail":
                 var reply = self.statusReply()
                 reply.log = self.log.tail(lines: request.lines ?? 200)
@@ -341,6 +347,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         r.searching = state.searching
         r.outage = state.outage
         r.failoverAt = state.failoverAt
+        r.expired = state.expired
         r.latencyMs = state.latencyMs
         r.latencyAt = state.latencyAt
         return r

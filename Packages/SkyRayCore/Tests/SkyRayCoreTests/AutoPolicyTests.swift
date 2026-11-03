@@ -5,6 +5,14 @@ final class AutoPolicyTests: XCTestCase {
     private let p = AutoPolicy()
     private func c(_ id: String, _ delay: Int64, _ order: Int) -> AutoSelect.Candidate { AutoSelect.Candidate(id: id, delayMs: delay, order: order) }
 
+    func testThePullKeysAreParsedAndClamped() {
+        let q = AutoPolicy.parse("pull=96,pullcap=100,pullwin=3")
+        XCTAssertEqual(q.pullKb, 96); XCTAssertEqual(q.pullCapPerHour, 60); XCTAssertEqual(q.pullWinSec, 5)
+        XCTAssertEqual(AutoPolicy.parse("pull=0").pullKb, 0)
+        XCTAssertEqual(AutoPolicy.parse("pull=999").pullKb, 256)
+        XCTAssertEqual(AutoPolicy.default.pullKb, 128); XCTAssertEqual(AutoPolicy.default.pullCapPerHour, 6); XCTAssertEqual(AutoPolicy.default.pullWinSec, 15)
+    }
+
     func testTheMarginIsAShareOfTheLineInUseWithAFloor() {
         XCTAssertTrue(p.shouldSwitch(currentMs: 400, bestMs: 330))      // 60 ms margin at 400
         XCTAssertFalse(p.shouldSwitch(currentMs: 400, bestMs: 345))

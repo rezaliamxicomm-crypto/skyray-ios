@@ -16,7 +16,7 @@ struct HeroView: View {
 
     private var grow: CGFloat { 1 + 0.12 * min(1, max(0, spare) / 160) }
     private var discColor: Color {
-        if model.isConnected { return model.searching ? .amber : .connectOn }
+        if model.isConnected { return (model.searching || model.expired) ? .amber : .connectOn }
         return .primaryBlue
     }
 
@@ -104,6 +104,7 @@ struct HeroView: View {
     /// The chip under the state while connected: the line in use's time and its age — never its name.
     private var chip: (text: String, red: Bool)? {
         if model.testing { return (L("testing"), false) }
+        if model.expired { return (L("expired"), true) }                                        // the box said the subscription ended (2.1.2)
         if model.searching { return (L("no.line.answers") + " · " + model.ago(model.latencyAt), true) }
         guard let at = model.latencyAt else { return (L("state.connecting"), false) }          // the first measurement is on its way
         if model.latencyMs > 0 { return ("\(model.latencyMs) ms · " + model.ago(at), false) }
@@ -121,7 +122,7 @@ struct ConnectButton: View {
     @EnvironmentObject private var model: AppModel
 
     private var colors: [Color] {
-        if model.isConnected { return model.searching ? [.amber, .amber] : [.greenLight, .connectOn] }
+        if model.isConnected { return (model.searching || model.expired) ? [.amber, .amber] : [.greenLight, .connectOn] }
         return [.blueLight, .primaryBlue]
     }
 

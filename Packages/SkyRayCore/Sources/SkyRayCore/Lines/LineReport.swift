@@ -4,18 +4,37 @@ import Foundation
 /// row of line_reports; the panel shows it — the customer sees no line name). The same shape as the Android app's
 /// EthaReport:
 ///
-///     v=1;t=<epoch s>;trig=<connect|first|auto|failover|manual|network|search>;use=<label>;sw=<0|1>;r=<kbps>;l=<label>:<ms>,<label>:-1,…;c=<label>:<ms>,…
+///     v=1;t=<epoch s>;trig=<connect|first|auto|failover|manual|network|search>;use=<label>;sw=<0|1>;r=<kbps>;l=<label>:<ms>,<label>:-1,…;c=<label>:<ms>,…;p=<label>:<got>/<want>/<ms>/<why>,…
 ///
 /// `r` (2.1): the best five-second download rate seen on the line in use during the pass, in kbps, when any (the passive
 /// throughput figure for the box's ranking; a latency probe cannot see a slow line). `c` (2.1.1): the connect time of each
-/// line that was measured — its first request, handshakes and all — beside `l`'s warm round trip; only lines with one.
+/// line that was measured — its first request, handshakes and all — beside `l`'s warm round trip; only lines with one. `p` (2.1.2):
+/// the pulls since the last report — `want` KB of the box's blob asked through the line, `got` the KB that came, `ms` how long it took
+/// or ran, `why` c (at Connect) | s (a stall whose HEAD passed) | w (before a switch) | h (the box called the line dead); at most
+/// maxPulls, the newest kept.
 ///
 /// A label is the line's name without its "EthaVPN-" prefix (REALITY-relay-FRA9-443, XHTTP-api-CleanIP1-443); a line
 /// named otherwise is left out. ms -1 = no answer. The header stays under 4 KB (at most 64 lines).
 public enum LineReport {
     public static let prefix = "EthaVPN-"
     public static let maxLines = 64
+    public static let maxPulls = 16
     private static let label = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,48}$")
+
+    /// One pull (2.1.2): the line's label, the KB that came, the KB asked, the time, why.
+    public struct Pull: Equatable {
+        public let label: String
+        public let got: Int
+        public let want: Int
+        public let ms: Int64
+        public let why: String
+        public init(label: String, got: Int, want: Int, ms: Int64, why: String) { self.label = label; self.got = got; self.want = want; self.ms = ms; self.why = why }
+    }
+
+    /// Pure: a bare label (without the prefix) of the shape the box takes.
+    static func isLabel(_ l: String) -> Bool {
+        label.firstMatch(in: l, range: NSRange(location: 0, length: (l as NSString).length)) != nil
+    }
 
     /// The line's label for the box, or nil when the line is not one of ours.
     public static func label(_ remark: String?) -> String? {
@@ -28,7 +47,7 @@ public enum LineReport {
     /// The header. `results`: (remark, ms) in the subscription's order, -1 failed, 0 not measured (left out); nil when
     /// nothing measured was one of our lines.
     public static func build(now: Date, trigger: String, inUseRemark: String?, switched: Bool, results: [(String, Int64)], rateKbps: Int64 = 0,
-                             colds: [String: Int64] = [:]) -> String? {
+                             colds: [String: Int64] = [:], pulls: [Pull] = []) -> String? {
         var items: [String] = []
         var named = Set<String>()
         for (remark, ms) in results {
@@ -45,7 +64,9 @@ public enum LineReport {
         let use = label(inUseRemark) ?? ""
         let rate = rateKbps > 0 ? ";r=\(rateKbps)" : ""
         let c = cold.isEmpty ? "" : ";c=\(cold.joined(separator: ","))"
-        return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0)\(rate);l=\(items.joined(separator: ","))\(c)"
+        let valid = pulls.filter { isLabel($0.label) && $0.want > 0 }.suffix(maxPulls)
+        let p = valid.isEmpty ? "" : ";p=" + valid.map { "\($0.label):\(max(0, $0.got))/\($0.want)/\(max(0, $0.ms))/\($0.why.isEmpty ? "o" : String($0.why.prefix(1)))" }.joined(separator: ",")
+        return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0)\(rate);l=\(items.joined(separator: ","))\(c)\(p)"
     }
 
     /// One text for a set of lines: the same set → the same text, whatever their ids (the line's link without its name)
