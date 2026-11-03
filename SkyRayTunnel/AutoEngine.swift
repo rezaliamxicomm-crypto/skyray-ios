@@ -185,6 +185,7 @@ final class AutoEngine {
     func resume() {
         paused = false
         samples.removeAll(); rateSamples.removeAll()
+        recentCurrent.removeAll()                              // the clock stood still while the phone slept: nothing of before is recent (2.1.3)
         if timerSuspended, let t = timer { t.resume(); timerSuspended = false }
         // the phone woke (2.1.1): the line in use is probed now, and the whole picture again when it is old — nothing ran meanwhile
         guard schedule.nextProbeAt != nil else { return }
@@ -218,6 +219,7 @@ final class AutoEngine {
             health.forgive()
         }
         samples.removeAll(); rateSamples.removeAll()
+        recentCurrent.removeAll()                              // the chip's recent readings were the old network's (2.1.3)
         decision.firstSwitchDone = false
         let now = AutoEngine.mono()
         let before = schedule.lastNetworkAt
@@ -668,15 +670,25 @@ final class AutoEngine {
         guard let cur = candidates.first(where: { $0.id == current }) else { return false }
         guard let stale = AutoDecision.best(candidates.filter { $0.id != current }), !measuring,
               AutoDecision.worthASecondLook(phase: phase, currentMs: cur.ms, bestMs: stale.ms, policy: policy),
+              !(phase == .first && decision.firstSwitchDone),
               let curLine = line(current), let candLine = line(stale.id) else { return decideNow(phase, reason: reason, lookedAt: nil) }
         measuring = true
         let before = (cur.ms, stale.ms)
-        measureOnce([curLine, candLine], concurrency: 2, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+        let timeout = (phase == .first ? min(policy.probeTimeoutSec, AutoEngine.firstPassTimeoutSec) : policy.probeTimeoutSec) * 1000
+        measureOnce([curLine, candLine], concurrency: 2, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: timeout) { [weak self] out in
             guard let self = self else { return }
             self.measuring = false
+            guard !out.isEmpty else { return }                  // no measurement at all: no move on the numbers taken apart
             self.record(out, which: [curLine, candLine])
             self.log.info("auto: a second look, together: \(curLine.remark)=\(self.results[curLine.id] ?? 0) \(candLine.remark)=\(self.results[candLine.id] ?? 0) (apart they read \(before.0) and \(before.1))")
-            _ = self.decideNow(phase, reason: reason, lookedAt: stale.id)
+            if (self.results[self.current] ?? 0) < 0 {           // the line in use failed in the look: the failover's own path (its fetch, its report)
+                self.failover(reason: "probe", currentFailed: true)
+                return
+            }
+            if self.decideNow(phase, reason: reason, lookedAt: stale.id) {   // a move made here without a pull: reported like one made with it
+                self.movedInPass = true
+                self.report(trigger: "auto", switched: true)
+            }
         }
         return false
     }
@@ -684,11 +696,11 @@ final class AutoEngine {
     private func decideNow(_ phase: AutoDecision.Phase, reason: String, lookedAt: String?) -> Bool {
         let candidates = lines.map { AutoDecision.Candidate(id: $0.id, ms: results[$0.id] ?? 0, order: $0.order) }
         guard let cur = candidates.first(where: { $0.id == current }) else { return false }
-        guard let target = decision.target(now: AutoEngine.mono(), phase: phase, current: cur, candidates: candidates, policy: policy) else { return false }
-        if let looked = lookedAt, target != looked, cur.ms >= 0 {   // another line leads by a number not taken together: not this pass
-            log.info("auto: \(name(target)) leads by a reading taken apart: no move this pass")
+        if let looked = lookedAt, cur.ms >= 0, let lead = AutoDecision.best(candidates.filter { $0.id != current }), lead.id != looked {
+            log.info("auto: \(name(lead.id)) leads by a reading taken apart: no move this pass")   // before the decision's clocks move
             return false
         }
+        guard let target = decision.target(now: AutoEngine.mono(), phase: phase, current: cur, candidates: candidates, policy: policy) else { return false }
         // the candidate is pulled before the move (2.1.2): a line that answers but carries nothing is condemned instead, and the move,
         // when it comes, is reported on its own; with no pull to make (the budget spent, the pull off) the move is now, as before
         guard let cand = line(target), !measuring, pullAllowed(AutoEngine.mono()) else { return switchTo(id: target, reason: reason) }
@@ -785,7 +797,7 @@ final class AutoEngine {
 
     /// Connect: the line the first pass picked is pulled once — a line pulled on its way in (the first pass's correction) is not pulled
     /// again; one that carries nothing is left for the best alternative, which is pulled before the move.
-    private func connectPull(retries: Int = 5) {
+    private func connectPull(retries: Int = 25) {
         guard connectPullDue else { return }              // a wake runs the first pass again; the pull is once per Connect and per network change
         if measuring {                                     // the first pass's second look (2.1.3) or its candidate's pull is in flight: in a second
             if retries > 0 { queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.connectPull(retries: retries - 1) } }
