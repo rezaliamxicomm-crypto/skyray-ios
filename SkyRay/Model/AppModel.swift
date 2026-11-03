@@ -347,7 +347,7 @@ final class AppModel: ObservableObject {
     /// A fetch that ended with the box's word that the subscription ended (a signed 403, 2.1.2): the card re-read (the importer set
     /// its expiry), the running tunnel told — its engine stops looking and the screen says Expired.
     private func noteFetchFailure(_ error: Error) async {
-        guard case .expired? = error as? FetchError else { return }
+        guard case .expired? = error as? SubscriptionImporter.FetchError else { return }
         reload()
         if vpn.isActive { _ = await vpn.send(.expired); await pollStatus() }
     }
