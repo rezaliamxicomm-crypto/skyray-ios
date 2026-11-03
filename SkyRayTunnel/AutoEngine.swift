@@ -108,6 +108,7 @@ final class AutoEngine {
     private var lastPull: (id: String, at: Double, carries: Bool)?   // the line last pulled, when, and whether it carried
     private var connectPullDue = true                 // the Connect pull: once after Connect, once after a network change
     private var expired = false                       // the box said the subscription ended: nothing to look for until a fetch answers again
+    private var recentCurrent: [(ms: Int64, at: Double)] = []   // the line in use's last good readings: the chip shows the best within steadyWindow (2.1.3)
     private var deadPulledFor: Hint?                  // the advice the line in use was last judged against (once per advice)
 
     private static let tick: TimeInterval = 1
@@ -126,6 +127,8 @@ final class AutoEngine {
     private static let firstPassTimeoutSec = 3
     private static let pullHour: Double = 3600           // the pull budget's window (2.1.2)
     private static let pullFresh: Double = 60            // a line pulled within this is not pulled again at Connect
+    private static let steadyWindow: Double = 90         // the chip shows the best reading of the line in use within this (2.1.3)
+    private static let steadyKept = 5
 
     init(queue: DispatchQueue, store: SkyRayStore, log: RingLog, lines: [Line], policy: AutoPolicy, apiPort: Int, current: String,
          network: String, hint: Hint?, traffic: @escaping () -> (up: Int64, down: Int64), onSwitch: @escaping (Line, String) -> Void) {
@@ -235,14 +238,12 @@ final class AutoEngine {
         }
         measuring = true
         let timeout = policy.probeTimeoutSec * 1000
-        let rest = lines.filter { $0.id != current }
-        let first: [Line] = line(current).map { [$0] } ?? []
-        // the line in use first, so the chip has its number within a second; then every other line at once — connected all
-        // together, then read all together, so no line is read beside another's handshakes (2.1.1)
-        measureSet(first, concurrency: 1, timeoutMs: timeout, whole: false) { [weak self] _ in
+        // every line in one batch, the line in use among them (2.1.3): until 2.1.2 the line in use went first and alone, and a probe
+        // alone on an idle link pays the radio's wake-up — it read 300 ms where the lines read together read 160, so every test
+        // moved off it and the next test moved back
+        measureSet(lines, concurrency: max(1, lines.count), timeoutMs: timeout, whole: true) { [weak self] _ in
             guard let self = self else { completion("none"); return }
-            self.measureSet(rest, concurrency: max(1, rest.count), timeoutMs: timeout, whole: true) { [weak self] _ in
-            guard let self = self else { completion("none"); return }
+            do {
             self.measuring = false
             let moved = self.decide(.manual, reason: "manual")
             self.report(trigger: "manual", switched: moved)
@@ -614,7 +615,11 @@ final class AutoEngine {
             if ms > 0 {
                 results[id] = ms
                 health.ok(label(id), ms: ms, now: wall)
-                if id == current { firstReading = true }
+                if id == current {
+                    firstReading = true
+                    recentCurrent.append((ms, AutoEngine.mono()))
+                    if recentCurrent.count > AutoEngine.steadyKept { recentCurrent.removeFirst(recentCurrent.count - AutoEngine.steadyKept) }
+                }
             } else if condemn {
                 results[id] = ms
                 health.failed(label(id), now: wall, policy: policy)
@@ -649,16 +654,41 @@ final class AutoEngine {
         }
         current = id
         passRateKbps = 0
+        recentCurrent.removeAll()
         log.info("auto: new connections take \(l.remark) (\(reason))")
         onSwitch(l, reason)
         tellLatency()
         return true
     }
 
+    /// The second look (2.1.3): numbers taken apart are not comparable — a probe alone on an idle link pays the radio's wake-up — so
+    /// before any move by latency the line in use and the candidate are measured together, and the decision sees those numbers.
     private func decide(_ phase: AutoDecision.Phase, reason: String) -> Bool {
         let candidates = lines.map { AutoDecision.Candidate(id: $0.id, ms: results[$0.id] ?? 0, order: $0.order) }
         guard let cur = candidates.first(where: { $0.id == current }) else { return false }
+        guard let stale = AutoDecision.best(candidates.filter { $0.id != current }), !measuring,
+              AutoDecision.worthASecondLook(phase: phase, currentMs: cur.ms, bestMs: stale.ms, policy: policy),
+              let curLine = line(current), let candLine = line(stale.id) else { return decideNow(phase, reason: reason, lookedAt: nil) }
+        measuring = true
+        let before = (cur.ms, stale.ms)
+        measureOnce([curLine, candLine], concurrency: 2, url: schedule.fallback ? Etha.probeFallbackURL : Etha.probeURL, timeoutMs: policy.probeTimeoutSec * 1000) { [weak self] out in
+            guard let self = self else { return }
+            self.measuring = false
+            self.record(out, which: [curLine, candLine])
+            self.log.info("auto: a second look, together: \(curLine.remark)=\(self.results[curLine.id] ?? 0) \(candLine.remark)=\(self.results[candLine.id] ?? 0) (apart they read \(before.0) and \(before.1))")
+            _ = self.decideNow(phase, reason: reason, lookedAt: stale.id)
+        }
+        return false
+    }
+
+    private func decideNow(_ phase: AutoDecision.Phase, reason: String, lookedAt: String?) -> Bool {
+        let candidates = lines.map { AutoDecision.Candidate(id: $0.id, ms: results[$0.id] ?? 0, order: $0.order) }
+        guard let cur = candidates.first(where: { $0.id == current }) else { return false }
         guard let target = decision.target(now: AutoEngine.mono(), phase: phase, current: cur, candidates: candidates, policy: policy) else { return false }
+        if let looked = lookedAt, target != looked, cur.ms >= 0 {   // another line leads by a number not taken together: not this pass
+            log.info("auto: \(name(target)) leads by a reading taken apart: no move this pass")
+            return false
+        }
         // the candidate is pulled before the move (2.1.2): a line that answers but carries nothing is condemned instead, and the move,
         // when it comes, is reported on its own; with no pull to make (the budget spent, the pull off) the move is now, as before
         guard let cand = line(target), !measuring, pullAllowed(AutoEngine.mono()) else { return switchTo(id: target, reason: reason) }
@@ -755,8 +785,12 @@ final class AutoEngine {
 
     /// Connect: the line the first pass picked is pulled once — a line pulled on its way in (the first pass's correction) is not pulled
     /// again; one that carries nothing is left for the best alternative, which is pulled before the move.
-    private func connectPull() {
+    private func connectPull(retries: Int = 5) {
         guard connectPullDue else { return }              // a wake runs the first pass again; the pull is once per Connect and per network change
+        if measuring {                                     // the first pass's second look (2.1.3) or its candidate's pull is in flight: in a second
+            if retries > 0 { queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.connectPull(retries: retries - 1) } }
+            return
+        }
         connectPullDue = false
         guard let cur = line(current) else { return }
         if let lp = lastPull, lp.id == current, AutoEngine.mono() - lp.at < AutoEngine.pullFresh { return }
@@ -820,8 +854,9 @@ final class AutoEngine {
 
     /// The line in use's time to the App Group: the app's chip.
     private func tellLatency() {
-        let ms = results[current] ?? 0
-        if ms <= 0, !firstReading { return }   // before the first answer after Connect the chip stays "Connecting…", whatever a probe did (2.1.1)
+        let latest = results[current] ?? 0
+        if latest <= 0, !firstReading { return }   // before the first answer after Connect the chip stays "Connecting…", whatever a probe did (2.1.1)
+        let ms = AutoDecision.steady(recentCurrent, latest: latest, now: AutoEngine.mono(), window: AutoEngine.steadyWindow)   // the best recent reading (2.1.3)
         store.updateTunnelState { $0.latencyMs = ms; $0.latencyAt = Date() }
     }
 

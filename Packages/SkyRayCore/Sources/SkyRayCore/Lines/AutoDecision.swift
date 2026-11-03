@@ -30,6 +30,28 @@ public struct AutoDecision: Equatable {
         candidates.filter { $0.ms > 0 }.min { ($0.ms, $0.order) < ($1.ms, $1.order) }
     }
 
+    /// The second look (2.1.3): whether a candidate's lead over the line in use — numbers taken at different moments — is worth
+    /// measuring the two together before any move. A probe made alone on an idle link pays the radio's wake-up (about 140 ms on an
+    /// iPhone's Wi-Fi power save; the line in use, probed first and alone, read 300 ms where the lines probed together read 160), so
+    /// numbers taken apart are not comparable and a move on them flips the lines back and forth. A failed line in use needs no look
+    /// (the failover's own joint probe serves); a manual test measures every line together already.
+    public static func worthASecondLook(phase: Phase, currentMs: Int64, bestMs: Int64, policy: AutoPolicy) -> Bool {
+        if currentMs <= 0 || bestMs <= 0 { return false }
+        switch phase {
+        case .failover, .manual: return false
+        case .first: return policy.shouldSwitch(currentMs: currentMs, bestMs: bestMs, factor: 2)
+        case .passEnd: return policy.shouldSwitch(currentMs: currentMs, bestMs: bestMs)
+        }
+    }
+
+    /// The chip's number (2.1.3): the best of the line in use's readings within the window — a probe alone on an idle link pays the
+    /// wake-up, the next may not —, never older than the window; a failed latest reading is shown as it is. `readings`: (ms, at).
+    public static func steady(_ readings: [(ms: Int64, at: Double)], latest: Int64, now: Double, window: Double) -> Int64 {
+        if latest <= 0 { return latest }
+        let fresh = readings.filter { $0.ms > 0 && now - $0.at >= 0 && now - $0.at <= window }.map { $0.ms }
+        return min(latest, fresh.min() ?? latest)
+    }
+
     /// The line new connections should take now, or nil to stay. `current` is the line in use with its fresh time.
     public mutating func target(now: Double, phase: Phase, current: Candidate, candidates: [Candidate], policy: AutoPolicy) -> String? {
         let others = candidates.filter { $0.id != current.id }

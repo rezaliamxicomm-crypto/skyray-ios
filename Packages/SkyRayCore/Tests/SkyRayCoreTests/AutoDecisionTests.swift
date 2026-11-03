@@ -5,6 +5,25 @@ final class AutoDecisionTests: XCTestCase {
     let p = AutoPolicy()
     func c(_ id: String, _ ms: Int64, _ order: Int = 0) -> AutoDecision.Candidate { AutoDecision.Candidate(id: id, ms: ms, order: order) }
 
+    func testASecondLookIsWorthItOnlyForALeadThatWouldMove() {
+        XCTAssertTrue(AutoDecision.worthASecondLook(phase: .passEnd, currentMs: 304, bestMs: 165, policy: p))     // ahead by the margin
+        XCTAssertFalse(AutoDecision.worthASecondLook(phase: .passEnd, currentMs: 170, bestMs: 160, policy: p))    // not by the margin
+        XCTAssertTrue(AutoDecision.worthASecondLook(phase: .first, currentMs: 243, bestMs: 163, policy: p))       // twice the margin for the first pass
+        XCTAssertFalse(AutoDecision.worthASecondLook(phase: .first, currentMs: 243, bestMs: 200, policy: p))
+        XCTAssertFalse(AutoDecision.worthASecondLook(phase: .manual, currentMs: 304, bestMs: 165, policy: p))     // measured together already
+        XCTAssertFalse(AutoDecision.worthASecondLook(phase: .failover, currentMs: 304, bestMs: 165, policy: p))
+        XCTAssertFalse(AutoDecision.worthASecondLook(phase: .passEnd, currentMs: -1, bestMs: 165, policy: p))     // a failed line in use: the failover's own
+        XCTAssertFalse(AutoDecision.worthASecondLook(phase: .passEnd, currentMs: 304, bestMs: 0, policy: p))
+    }
+
+    func testTheChipShowsTheBestRecentReadingAndAFailureAsItIs() {
+        let r: [(ms: Int64, at: Double)] = [(163, 1), (304, 31), (161, 61)]
+        XCTAssertEqual(AutoDecision.steady(r, latest: 304, now: 90, window: 90), 161)      // the latest 304 after readings of 163 and 161: 161
+        XCTAssertEqual(AutoDecision.steady(r, latest: 304, now: 200, window: 90), 304)     // every good reading older than the window: the latest
+        XCTAssertEqual(AutoDecision.steady(r, latest: -1, now: 90, window: 90), -1)        // a failure is a failure
+        XCTAssertEqual(AutoDecision.steady(r, latest: 150, now: 90, window: 90), 150)      // the latest is the best
+    }
+
     func testAFailedLineInUseFailsOverToTheBestKnownAtOnce() {
         var d = AutoDecision()
         d.lastSwitchAt = 95                                                     // moved five seconds ago: the dwell does not hold a failover
