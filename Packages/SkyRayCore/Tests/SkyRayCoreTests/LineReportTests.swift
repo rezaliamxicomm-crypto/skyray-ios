@@ -62,12 +62,22 @@ final class LineReportTests: XCTestCase {
     func testThePullsRideAfterTheConnectTimes() {
         let h = LineReport.build(now: Date(timeIntervalSince1970: 1_761_770_000), trigger: "stall", inUseRemark: "EthaVPN-REALITY-relay-FRA9-443", switched: false,
                                  results: [("EthaVPN-REALITY-relay-FRA9-443", 160)],
-                                 pulls: [LineReport.Pull(label: "REALITY-relay-FRA9-443", got: 128, want: 128, ms: 940, why: "c"),
-                                         LineReport.Pull(label: "REALITY-relay-FRA3-443", got: 12, want: 128, ms: 5000, why: "s"),
+                                 pulls: [LineReport.Pull(label: "REALITY-relay-FRA9-443", got: 128, want: 128, ms: 940, why: "c", end: "f"),
+                                         LineReport.Pull(label: "REALITY-relay-FRA3-443", got: 12, want: 128, ms: 5000, why: "s", end: "i"),
                                          LineReport.Pull(label: "bad label", got: 1, want: 1, ms: 1, why: "w"),
-                                         LineReport.Pull(label: "REALITY-relay-FRA5-443", got: -3, want: 64, ms: 10, why: "")])
+                                         LineReport.Pull(label: "REALITY-relay-FRA5-443", got: -3, want: 64, ms: 10, why: ""),
+                                         LineReport.Pull(label: "REALITY-relay-FRA1-443", got: 90, want: 128, ms: 15000, why: "h", end: "w"),
+                                         LineReport.Pull(label: "REALITY-relay-FRA2-443", got: 64, want: 64, ms: 300, why: "c")])
         XCTAssertEqual(h, "v=1;t=1761770000;trig=stall;use=REALITY-relay-FRA9-443;sw=0;l=REALITY-relay-FRA9-443:160;" +
-                       "p=REALITY-relay-FRA9-443:128/128/940/c,REALITY-relay-FRA3-443:12/128/5000/s,REALITY-relay-FRA5-443:0/64/10/o")
+                       "p=REALITY-relay-FRA9-443:128/128/940/c/f,REALITY-relay-FRA3-443:12/128/5000/s/i,REALITY-relay-FRA5-443:0/64/10/o/i," +
+                       "REALITY-relay-FRA1-443:90/128/15000/h/w,REALITY-relay-FRA2-443:64/64/300/c/f")
+        XCTAssertTrue(LineReport.Pull(label: "x", got: 128, want: 128, ms: 1, why: "c", end: "f").carries)
+        XCTAssertTrue(LineReport.Pull(label: "x", got: 90, want: 128, ms: 1, why: "c", end: "w").carries)
+        XCTAssertTrue(LineReport.Pull(label: "x", got: 64, want: 64, ms: 1, why: "c").carries)
+        XCTAssertFalse(LineReport.Pull(label: "x", got: 12, want: 128, ms: 1, why: "c", end: "i").carries)
+        XCTAssertFalse(LineReport.Pull(label: "x", got: 0, want: 128, ms: 1, why: "c", end: "e").carries)
+        XCTAssertFalse(LineReport.Pull(label: "x", got: 0, want: 128, ms: 1, why: "c", end: "w").carries)
+        XCTAssertFalse(LineReport.Pull(label: "x", got: 3, want: 16, ms: 1, why: "c").carries)
         let many = (1...40).map { LineReport.Pull(label: "L\($0)-1-x-443", got: 1, want: 1, ms: 1, why: "w") }
         let tail = LineReport.build(now: Date(timeIntervalSince1970: 0), trigger: "auto", inUseRemark: nil, switched: false, results: [("EthaVPN-A-1-x-443", 5)], pulls: many)!
             .components(separatedBy: "p=")[1].split(separator: ",")

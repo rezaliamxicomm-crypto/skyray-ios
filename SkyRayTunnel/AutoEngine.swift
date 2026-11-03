@@ -43,7 +43,10 @@ import SkyRayXray
 ///     a HEAD and carries nothing — until 2.1.1 that was a "false alarm" and a minute's rest on the dead line), on a candidate
 ///     before any switch (w), and on the line in use when a fetch brings the box's word that it is dead for this network (h:
 ///     the phone's own evidence wins — a line that carries stays); never in the trickle; at most pullCapPerHour an hour; every
-///     pull goes into the next report (p=); a pull that fails condemns the line like a failed probe;
+///     pull goes into the next report (p=). A pull whose bytes stop, or that gets no answer, condemns the line like a failed
+///     probe; one that runs out of its window with bytes still coming is a slow line that carries — never condemned for its
+///     speed, but the best alternative is pulled at once and takes over when it carries every byte within the window (a slow
+///     alternative leaves things as they are);
 ///   - the box's word that the subscription ended (a signed 403 on the app's fetch, onExpired): nothing is probed until a
 ///     fetch answers again (onFetched; a renewal is the same link), the state says "expired".
 ///
@@ -427,11 +430,15 @@ final class AutoEngine {
                 // answers a HEAD and carries nothing (2.1.2): the pull is the second opinion, and only a pull that fails lets the
                 // failover go on
                 guard reason == "stall" else { self.stay(cur, reason: reason); return }
-                self.pull(cur, why: "s") { [weak self] ok in
+                self.pull(cur, why: "s") { [weak self] p in
                     guard let self = self else { return }
-                    guard ok == false else { self.stay(cur, reason: reason); return }
-                    self.log.warn("auto: \(cur.remark) answers but carries nothing: the stall is real")
-                    self.failoverProceed(reason: reason, cur: cur, alt: alt, out: out, tried: tried, attempt: attempt, currentFailed: true)
+                    if let p = p, !p.carries {
+                        self.log.warn("auto: \(cur.remark) answers but carries nothing: the stall is real")
+                        self.failoverProceed(reason: reason, cur: cur, alt: alt, out: out, tried: tried, attempt: attempt, currentFailed: true)
+                        return
+                    }
+                    self.stay(cur, reason: reason)
+                    if p?.endLetter == "w" { self.slowEscape(reason: "slow under a stall") }   // it carries, slowly: a faster line may take over
                 }
                 return
             }
@@ -448,9 +455,9 @@ final class AutoEngine {
     /// that carries nothing is condemned and the next tried, once more; nothing left: Searching.
     private func failoverProceed(reason: String, cur: Line, alt: Line?, out: [String: Int64], tried: Set<String>, attempt: Int, currentFailed: Bool) {
         if let a = alt, (out[a.id] ?? -1) > 0 {
-            pull(a, why: "w") { [weak self] ok in
+            pull(a, why: "w") { [weak self] p in
                 guard let self = self else { return }
-                if ok == false {                                 // the candidate answers but carries nothing: not it, the next one
+                if p?.carries == false {                         // the candidate answers but carries nothing: not it, the next one
                     self.condemn(a.id)
                     if attempt < 2 { self.failover(reason: reason, tried: tried.union([a.label]), attempt: attempt + 1, currentFailed: currentFailed); return }
                     self.condemn(cur.id)
@@ -651,11 +658,12 @@ final class AutoEngine {
         // the candidate is pulled before the move (2.1.2): a line that answers but carries nothing is condemned instead, and the move,
         // when it comes, is reported on its own; with no pull to make (the budget spent, the pull off) the move is now, as before
         guard let cand = line(target), !measuring, pullAllowed(AutoEngine.mono()) else { return switchTo(id: target, reason: reason) }
-        pull(cand, why: "w") { [weak self] ok in
+        pull(cand, why: "w") { [weak self] p in
             guard let self = self else { return }
-            if ok == false {
+            if p?.carries == false {
                 self.log.warn("auto: \(cand.remark) answers but carries nothing: no move")
                 self.condemn(cand.id)
+                if phase == .first { self.decision.firstSwitchDone = false }   // the first pass's one correction is not spent on it
                 return
             }
             if self.switchTo(id: target, reason: reason) {
@@ -676,10 +684,11 @@ final class AutoEngine {
         return pullTimes.count < policy.pullCapPerHour
     }
 
-    /// pullKb KB of the box's blob through the line (Probe.pull): true when every byte came, false when the line answers but carries
-    /// nothing — or too slowly (pullWinSec) —, nil when no pull was made (the budget spent, the pull off, something else measuring).
-    /// Every pull goes into the next report. Off the queue, back on it; `measuring` holds the trickle meanwhile.
-    private func pull(_ line: Line, why: String, completion: @escaping (Bool?) -> Void) {
+    /// pullKb KB of the box's blob through the line (Probe.pull): true when the line carries — every byte came, or the window (pullWinSec)
+    /// ran out with bytes still coming: slow, never condemned for its speed —, false when it answers but carries nothing — the bytes
+    /// stopped for stallSec, or nothing came at all —, nil when no pull was made (the budget spent, the pull off, something else
+    /// measuring). Every pull goes into the next report. Off the queue, back on it; `measuring` holds the trickle meanwhile.
+    private func pull(_ line: Line, why: String, completion: @escaping (LineReport.Pull?) -> Void) {
         let now = AutoEngine.mono()
         guard !stopped, !measuring, pullAllowed(now) else { completion(nil); return }
         pullTimes.append(now)
@@ -692,12 +701,45 @@ final class AutoEngine {
             self.queue.async {
                 self.measuring = false
                 guard !self.stopped else { completion(nil); return }
-                let ok = r.gotKb >= want
-                self.pulls.append(LineReport.Pull(label: line.label, got: r.gotKb, want: want, ms: r.ms, why: why))
+                let pull = LineReport.Pull(label: line.label, got: r.gotKb, want: want, ms: r.ms, why: why, end: r.end)
+                self.pulls.append(pull)
                 if self.pulls.count > LineReport.maxPulls { self.pulls.removeFirst(self.pulls.count - LineReport.maxPulls) }
                 self.lastPull = (line.id, AutoEngine.mono())
-                self.log.info("auto: pulled \(r.gotKb) of \(want) KB through \(line.remark) in \(r.ms) ms (\(why)): \(ok ? "it carries" : "it answers but carries nothing")")
-                completion(ok)
+                let verdict: String
+                switch pull.endLetter {
+                case "f": verdict = "it carries"
+                case "w": verdict = r.gotKb > 0 ? "slow, but it carries" : "nothing came in the window"
+                case "i": verdict = "the bytes stopped: it answers but carries nothing"
+                default: verdict = "no answer"
+                }
+                self.log.info("auto: pulled \(r.gotKb) of \(want) KB through \(line.remark) in \(r.ms) ms (\(why)): \(verdict)")
+                completion(pull)
+            }
+        }
+    }
+
+    /// The line in use carries, but slowly — its pull ran out of its window with bytes still coming: the best alternative is pulled at
+    /// once, and new connections move only to a line that proves faster, every byte within the window. A slow or dead alternative
+    /// leaves things as they are: a slow network is nobody's fault, and churning through the lines would only hurt (2.1.2).
+    private func slowEscape(reason: String) {
+        let mine = label(current)
+        let labels = lines.map { $0.label }
+        guard let cur = line(current),
+              let altLabel = health.bestKnown(labels, except: mine)
+                ?? (hint?.arrange(labels) ?? labels).first(where: { $0 != mine && !health.isDead($0) && !(hint?.dead.contains($0) ?? false) }),
+              let altId = idOf[altLabel], let alt = line(altId) else { return }
+        pull(alt, why: "w") { [weak self] p in
+            guard let self = self, let p = p else { return }
+            if p.endLetter == "f" {
+                self.log.info("auto: \(alt.remark) carries every byte within the window where \(cur.remark) was slow (\(reason)): moving")
+                self.switchTo(id: alt.id, reason: "faster than \(cur.remark)")
+                self.decision.moved(now: AutoEngine.mono())
+                self.report(trigger: "auto", switched: true)
+                self.store.saveLineHealth(self.health, on: self.network)
+            } else if !p.carries {
+                self.condemn(alt.id)
+            } else {
+                self.log.info("auto: \(alt.remark) is slow too (\(reason)): staying on \(cur.remark) — a slow network")
             }
         }
     }
@@ -707,11 +749,15 @@ final class AutoEngine {
     private func connectPull() {
         guard let cur = line(current) else { return }
         if let lp = lastPull, lp.id == current, AutoEngine.mono() - lp.at < AutoEngine.pullFresh { return }
-        pull(cur, why: "c") { [weak self] ok in
-            guard let self = self, ok == false else { return }
-            self.log.warn("auto: \(cur.remark) answers but carries nothing right after Connect: leaving it")
-            self.condemn(cur.id)
-            self.failover(reason: "pull", currentFailed: true)
+        pull(cur, why: "c") { [weak self] p in
+            guard let self = self, let p = p else { return }
+            if !p.carries {
+                self.log.warn("auto: \(cur.remark) answers but carries nothing right after Connect: leaving it")
+                self.condemn(cur.id)
+                self.failover(reason: "pull", currentFailed: true)
+            } else if p.endLetter == "w" {
+                self.slowEscape(reason: "slow right after Connect")
+            }
         }
     }
 
@@ -734,17 +780,14 @@ final class AutoEngine {
         guard let cur = line(current) else { return }
         let labels = lines.map { $0.label }
         guard labels.contains(where: { $0 != mine && !health.isDead($0) && !advice.dead.contains($0) }) else { return }   // nowhere better to go
-        pull(cur, why: "h") { [weak self] ok in
-            guard let self = self else { return }
-            switch ok {
-            case false?:
+        pull(cur, why: "h") { [weak self] p in
+            guard let self = self, let p = p else { return }
+            if !p.carries {
                 self.log.warn("auto: the box calls \(cur.remark) dead on this network and it carries nothing: leaving it")
                 self.condemn(cur.id)
                 self.failover(reason: "hint", currentFailed: true)
-            case true?:
+            } else {
                 self.log.info("auto: the box calls \(cur.remark) dead on this network but it carries: staying")
-            default:
-                break
             }
         }
     }

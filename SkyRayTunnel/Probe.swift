@@ -152,28 +152,29 @@ final class Probe {
     }
 
     /// The pull (2.1.2): `wantKb` KB of `urlString` — the box's blob, an http:// target — through the line: a GET with a Range header
-    /// inside a CONNECT tunnel to the inbound, the body counted as it arrives and never kept. Ends when every byte came, when no byte
-    /// came for `idleMs` (the line answers but carries nothing), or at `winMs`. (KB that came, ms); 0 KB when the tunnel, the request
-    /// or a status under 400 did not come. Blocking: off the queue.
-    func pull(url urlString: String, wantKb: Int, winMs: Int, idleMs: Int) -> (gotKb: Int, ms: Int64) {
+    /// inside a CONNECT tunnel to the inbound, the body counted as it arrives and never kept. (KB that came, ms, how it ended): f every
+    /// byte came; i the bytes stopped — no byte for `idleMs` after some came, or the connection closed early — (the line answers but
+    /// carries nothing); w `winMs` ran out with bytes still coming (slow, but carrying); e no answer at all (the tunnel, the request or a
+    /// status under 400 did not come). Blocking: off the queue.
+    func pull(url urlString: String, wantKb: Int, winMs: Int, idleMs: Int) -> (gotKb: Int, ms: Int64, end: String) {
         close()
         let started = Date()
         func elapsed() -> Int64 { Int64(Date().timeIntervalSince(started) * 1000) }
-        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty, wantKb > 0 else { return (0, 0) }
+        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty, wantKb > 0 else { return (0, 0, "e") }
         let want = wantKb * 1024
         let idle = max(500, idleMs)
-        guard let fd = rawSocket(timeoutMs: idle) else { return (0, elapsed()) }
+        guard let fd = rawSocket(timeoutMs: idle) else { return (0, elapsed(), "e") }
         defer { Darwin.close(fd) }
         let target = host + ":\(url.port ?? 80)"
         let authority = host + (url.port.map { ":\($0)" } ?? "")
         let path = url.path.isEmpty ? "/" : url.path
-        guard rawExchange(fd, "CONNECT \(target) HTTP/1.1\r\nHost: \(target)\r\nUser-Agent: SkyRay\r\n\r\n") != nil else { return (0, elapsed()) }
+        guard rawExchange(fd, "CONNECT \(target) HTTP/1.1\r\nHost: \(target)\r\nUser-Agent: SkyRay\r\n\r\n") != nil else { return (0, elapsed(), "e") }
         let request = "GET \(path) HTTP/1.1\r\nHost: \(authority)\r\nUser-Agent: SkyRay\r\nRange: bytes=0-\(want - 1)\r\nConnection: close\r\n\r\n"
         let bytes = Array(request.utf8)
         var sent = 0
         while sent < bytes.count {
             let n = bytes.withUnsafeBufferPointer { send(fd, $0.baseAddress! + sent, $0.count - sent, 0) }
-            if n <= 0 { return (0, elapsed()) }
+            if n <= 0 { return (0, elapsed(), "e") }
             sent += n
         }
         var chunk = [UInt8](repeating: 0, count: 16384)
@@ -181,23 +182,24 @@ final class Probe {
         var body = 0
         var headDone = false
         let deadline = started.addingTimeInterval(TimeInterval(max(winMs, idle)) / 1000)
-        while body < want, Date() < deadline {
+        while body < want {
+            if Date() >= deadline { return (body / 1024, elapsed(), headDone && body > 0 ? "w" : (headDone ? "i" : "e")) }   // the window: slow when bytes came
             let n = chunk.withUnsafeMutableBufferPointer { recv(fd, $0.baseAddress!, $0.count, 0) }
-            if n <= 0 { break }                                   // nothing for idleMs, or the connection closed
+            if n <= 0 { return (body / 1024, elapsed(), headDone ? "i" : "e") }   // nothing for idleMs, or the connection closed: the bytes stopped
             if headDone { body += n; continue }
             head.append(contentsOf: chunk[0..<n])
             guard let end = Probe.headEnd(head) else {
-                if head.count > 32768 { return (0, elapsed()) }
+                if head.count > 32768 { return (0, elapsed(), "e") }
                 continue
             }
             guard let text = String(bytes: head[0..<end], encoding: .utf8),
-                  let statusLine = text.split(separator: "\r\n", omittingEmptySubsequences: true).first else { return (0, elapsed()) }
+                  let statusLine = text.split(separator: "\r\n", omittingEmptySubsequences: true).first else { return (0, elapsed(), "e") }
             let parts = statusLine.split(separator: " ")
-            guard parts.count >= 2, parts[0].hasPrefix("HTTP/"), let code = Int(parts[1]), code < 400 else { return (0, elapsed()) }
+            guard parts.count >= 2, parts[0].hasPrefix("HTTP/"), let code = Int(parts[1]), code < 400 else { return (0, elapsed(), "e") }
             headDone = true
             body = head.count - end
         }
-        return (min(body, want) / 1024, elapsed())
+        return (want / 1024, elapsed(), "f")
     }
 
     /// Writes one request, reads the response's head; the time to the end of the head, nil when the status is 400 or
