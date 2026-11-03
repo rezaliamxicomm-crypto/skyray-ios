@@ -55,10 +55,10 @@ final class AppModel: ObservableObject {
     init(store: SkyRayStore = .appGroup()) {
         self.store = store
         self.vpn = VPNController()
-        self.importer = SubscriptionImporter(store: store)
+        self.importer = SubscriptionImporter(store: store,
+                                             deviceCode: DeviceCode.make(id: UIDevice.current.identifierForVendor?.uuidString, bundle: Bundle.main.bundleIdentifier ?? ""))   // this phone as a code (2.1.2)
         AppLog.shared = RingLog(url: store.appLogURL)
         reload()
-        importer.deviceCode = DeviceCode.make(id: UIDevice.current.identifierForVendor?.uuidString, bundle: Bundle.main.bundleIdentifier ?? "")   // this phone as a code (2.1.2); after every property is set
         vpn.$status
             .removeDuplicates()
             .sink { [weak self] status in
