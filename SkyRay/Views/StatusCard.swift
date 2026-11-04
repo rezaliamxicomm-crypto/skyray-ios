@@ -16,7 +16,7 @@ struct HeroView: View {
 
     private var grow: CGFloat { 1 + 0.12 * min(1, max(0, spare) / 160) }
     private var discColor: Color {
-        if model.isConnected { return (model.searching || model.expired) ? .amber : .connectOn }
+        if model.isConnected { return model.exitDown ? .pingRed : (model.searching || model.expired) ? .amber : .connectOn }   // exitDown: the chosen country does not answer (3.0.0)
         return .primaryBlue
     }
 
@@ -61,6 +61,15 @@ struct HeroView: View {
                         .padding(.top, 4)
                 }
             }
+            if model.exits.count >= 2 { ServerBox().padding(.top, 14) }   // the Servers box (3.0.0)
+            if model.isConnected && model.exitDown {
+                HStack(spacing: 10) {
+                    Button(L("switch.server")) { model.showServers = true }.buttonStyle(EthaPrimaryButtonStyle())
+                    Button(L("keep.waiting")) { model.keepWaiting() }.buttonStyle(EthaOutlinedButtonStyle())
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 14)
+            } else {
             HStack(spacing: 10) {
                 Button(model.testing ? L("testing") : L("test.latency")) { Task { await model.testLatency() } }
                     .buttonStyle(EthaOutlinedButtonStyle())
@@ -76,6 +85,7 @@ struct HeroView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 14)
+            }
             Text(model.outcomeText ?? " ")
                 .font(AppFont.hint).foregroundColor(.onSurface)
                 .multilineTextAlignment(.center)
@@ -105,6 +115,7 @@ struct HeroView: View {
     private var chip: (text: String, red: Bool)? {
         if model.testing { return (L("testing"), false) }
         if model.expired { return (L("expired"), true) }                                        // the box said the subscription ended (2.1.2)
+        if model.exitDown { return (L("server.unreachable", model.exitName), true) }               // the chosen country does not answer (3.0.0)
         if model.searching { return (L("no.line.answers") + " · " + model.ago(model.latencyAt), true) }
         guard let at = model.latencyAt else { return (L("state.connecting"), false) }          // the first measurement is on its way
         if model.latencyMs > 0 { return ("\(model.latencyMs) ms · " + model.ago(at), false) }
@@ -122,7 +133,7 @@ struct ConnectButton: View {
     @EnvironmentObject private var model: AppModel
 
     private var colors: [Color] {
-        if model.isConnected { return (model.searching || model.expired) ? [.amber, .amber] : [.greenLight, .connectOn] }
+        if model.isConnected { return model.exitDown ? [.pingRed, .pingRed] : (model.searching || model.expired) ? [.amber, .amber] : [.greenLight, .connectOn] }
         return [.blueLight, .primaryBlue]
     }
 

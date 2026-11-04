@@ -13,8 +13,8 @@ struct ServerBox: View {
             HStack(spacing: 12) {
                 Text(model.exitFlag).font(.system(size: 22))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(L("server.title").uppercased()).font(.system(size: 11, weight: .medium)).foregroundColor(.muted).kerning(0.8)
-                    Text(model.exitName.isEmpty ? L("auto") : model.exitName).font(AppFont.body).foregroundColor(.onSurface).lineLimit(1)
+                    Text(L("server.title").uppercased()).font(AppFont.label).foregroundColor(.muted).kerning(0.8)
+                    Text(model.exitName.isEmpty ? L("auto") : model.exitName).font(AppFont.font(15, weight: .medium)).foregroundColor(.onSurface).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundColor(.muted)
@@ -79,9 +79,9 @@ struct ServersSheet: View {
         return Button { selected = code } label: {
             HStack(spacing: 12) {
                 Text(e.map { Exits.flag($0.country) } ?? "\u{1F310}").font(.system(size: 22))
-                Text(e?.name ?? L("auto")).font(AppFont.body).foregroundColor(.onSurface).lineLimit(1)
+                Text(e?.name ?? L("auto")).font(AppFont.font(15, weight: .medium)).foregroundColor(.onSurface).lineLimit(1)
                 Spacer(minLength: 8)
-                Text(text).font(AppFont.hint).foregroundColor(model.isConnected && (ms ?? 0) > 0 ? .greenLight : .muted)
+                Text(text).font(AppFont.ms).foregroundColor(model.isConnected && (ms ?? 0) > 0 ? .greenLight : .muted)
                 if chosen { Image(systemName: "checkmark").font(.system(size: 14, weight: .bold)).foregroundColor(.blueLight) }
             }
             .padding(.horizontal, 14)
