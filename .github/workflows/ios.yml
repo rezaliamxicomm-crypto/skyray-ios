@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-15   # macos-26 jobs were cancelled by GitHub three times on 2026-11-04 before running a step
     env:
       HAS_SIGNING: ${{ secrets.IOS_DIST_P12_BASE64 != '' && secrets.IOS_PROFILE_APP_BASE64 != '' && secrets.IOS_PROFILE_TUNNEL_BASE64 != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
