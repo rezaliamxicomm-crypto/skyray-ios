@@ -53,6 +53,7 @@ final class AppModel: ObservableObject {
     private var exitFails = 0
     private var exitWaitUntil: Date?
     private var exitWatchedAt: Date?
+    private var sendingChoice = false
 
     let store: SkyRayStore
     let vpn: VPNController
@@ -69,7 +70,7 @@ final class AppModel: ObservableObject {
         self.store = store
         self.vpn = VPNController()
         self.importer = SubscriptionImporter(store: store,
-                                             deviceCode: DeviceCodeStore.code(fallback: DeviceCode.make(id: UIDevice.current.identifierForVendor?.uuidString, bundle: Bundle.main.bundleIdentifier ?? "")))   // this phone as a code (2.1.2), kept in the Keychain (3.0.0): a reinstall is the same phone
+                                             deviceCode: SubscriptionImporter.phoneCode())   // this phone as a code (2.1.2), kept in the Keychain (3.0.0): a reinstall is the same phone
         AppLog.shared = RingLog(url: store.appLogURL)
         reload()
         vpn.$status
@@ -95,6 +96,7 @@ final class AppModel: ObservableObject {
     }
 
     var exitName: String { exits.first { $0.code == exitShown }?.name ?? "" }
+    var exitsOffered: [Exit] { exits.filter { $0.state != "off" } }
     var exitFlag: String { exits.first { $0.code == exitShown }.map { Exits.flag($0.country) } ?? "\u{1F310}" }
 
     private func refreshTunnelResults() { tunnelResults = store.tunnelState.results ?? [:] }
@@ -119,7 +121,7 @@ final class AppModel: ObservableObject {
         // Connected the moment the tunnel is up: traffic flows. The chip under it says "Connecting…" until the first
         // measurement is in (the operator's wording), then the number — or "no answer yet" when the line in use failed its
         // probe (2.0.2 kept saying Connecting… in that case, which read as nothing happening).
-        case .connected: return L(expired ? "state.expired" : exitDown ? "state.notconnected" : searching ? "state.searching" : "state.connected")   // exitDown: the chosen country does not answer (3.0.0)
+        case .connected: return L(expired ? "state.expired" : searching ? "state.searching" : exitDown ? "state.notconnected" : "state.connected")   // exitDown: the chosen country does not answer (3.0.0); a dead line says Searching first
         case .connecting, .reasserting: return L("state.connecting")
         case .disconnecting: return L("state.disconnecting")
         default: return L("state.notconnected")
@@ -131,8 +133,8 @@ final class AppModel: ObservableObject {
     /// Under the buttons: what to do while no line answers, else what the last test did; nil = nothing.
     var outcomeText: String? {
         if isConnected, expired { return L("expired.hint") }   // the box's word that the subscription ended (2.1.2)
-        if isConnected, exitDown { return L("exit.down.hint") }   // the chosen country does not answer (3.0.0)
         if isConnected, searching { return L(tunnel?.outage == true ? "lines.blocked" : "searching.hint") }   // the box's word when every phone of the network fails
+        if isConnected, exitDown { return L("exit.down.hint") }   // the chosen country does not answer (3.0.0)
         return outcomeKey.map { L($0) }
     }
 
@@ -196,6 +198,7 @@ final class AppModel: ObservableObject {
             if phase == .connecting || phase == .disconnecting { phase = .idle }
             tunnel = nil
             searching = false; testing = false; latencyMs = 0; latencyAt = nil; outcomeKey = nil
+            exitDown = false; exitFails = 0; exitWatchedAt = nil   // the red state belongs to a connection; the next one is judged afresh
         default:
             break
         }
@@ -371,7 +374,7 @@ final class AppModel: ObservableObject {
     /// A fetch that ended with the box's word that the subscription ended (a signed 403, 2.1.2): the card re-read (the importer set
     /// its expiry), the running tunnel told — its engine stops looking and the screen says Expired.
     private func noteFetchFailure(_ error: Error) async {
-        if case .devices(let limit, let active)? = error as? SubscriptionImporter.FetchError { devicesLimit = DevicesLimit(limit: limit, active: active); return }   // 3.0.0
+        if case .devices(let limit, let active)? = error as? SubscriptionImporter.FetchError { showServers = false; devicesLimit = DevicesLimit(limit: limit, active: active); return }   // 3.0.0 (the sheet away first: one presentation at a time)
         guard case .expired? = error as? SubscriptionImporter.FetchError else { return }
         reload()
         if vpn.isActive { _ = await vpn.send(.expired); await pollStatus() }
@@ -383,39 +386,64 @@ final class AppModel: ObservableObject {
     /// this phone's user and new connections take the country — no reconnect; not connected, Connect follows.
     func chooseExit(_ code: String) async {
         store.exitWant = code.isEmpty ? "auto" : code
-        exitDown = false; exitFails = 0
+        exitDown = false; exitFails = 0; exitWaitUntil = nil; exitWatchedAt = nil
         reload()
-        _ = await refreshQuietly(reason: "exit")
-        if !vpn.isActive { await connectTapped() }
+        if !vpn.isActive, phase == .idle { await connectTapped() }   // the tunnel first: the fetch can ride through it, and the choice needs no reconnect
+        await sendPendingChoice(code)
+    }
+
+    /// The pending choice to the box: a fetch that carries it — after a fetch already running, whose headers were built before the choice.
+    /// The answer settles it (the box's word stands); a choice the box did not apply gets a word.
+    private func sendPendingChoice(_ code: String) async {
+        guard !sendingChoice else { return }
+        sendingChoice = true
+        defer { sendingChoice = false }
+        var waited = 0
+        while refreshing, waited < 240 { try? await Task.sleep(nanoseconds: 250_000_000); waited += 1 }
+        guard store.exitWant != nil else { return }
+        if await refreshQuietly(reason: "exit"), store.exitWant == nil, exitShown != code {
+            banner = BannerMessage(text: L("server.notapplied"), kind: .error)
+        }
     }
 
     /// The sheet's figures: every country measured through the line in use — the tunnel's probe of that line, a HEAD to the country's /exit.
+    /// The box's own probe rides along as the control: a dead line fails every country, a dead card only its own.
     func measureExits() async {
         guard vpn.isActive, !measuringExits else { return }
         let targets = exits.filter { !$0.probe.isEmpty }
         guard !targets.isEmpty else { return }
         measuringExits = true
         defer { measuringExits = false }
-        guard let reply = await vpn.send(.measure(targets.map { "http://\($0.probe)\(Etha.exitProbePath)" })), let got = reply.measured else { return }
+        exitWatchedAt = Date()
+        var urls = targets.map { Self.probeURL($0.probe) }
+        if !urls.contains(Self.probeURL(Etha.probeBoxIP)) { urls.append(Self.probeURL(Etha.probeBoxIP)) }
+        guard let reply = await vpn.send(.measure(urls)), let got = reply.measured else { return }
         var m = exitMeasured
-        for e in targets { if let ms = got["http://\(e.probe)\(Etha.exitProbePath)"] { m[e.code] = ms } }
+        for e in targets { if let ms = got[Self.probeURL(e.probe)] { m[e.code] = ms } }
         exitMeasured = m; store.exitMeasured = m
-        judgeExit(m)
+        judgeExit(got)
     }
 
-    /// Every 30 s while connected on a country of its own (pollStatus, every 10 s): its probe alone; two failures in a row are the red state.
+    /// Every 30 s while connected on a country of its own (pollStatus, every 10 s): its probe and the box's; two failures in a row are the red state.
     func watchExit() async {
         guard vpn.isActive, let mine = exits.first(where: { $0.code == exitShown }), mine.routed else { if exitDown { exitDown = false; exitFails = 0 }; return }
+        if measuringExits { return }
         if let at = exitWatchedAt, Date().timeIntervalSince(at) < 30 { return }
         exitWatchedAt = Date()
-        let url = "http://\(mine.probe)\(Etha.exitProbePath)"
-        guard let reply = await vpn.send(.measure([url])), let ms = reply.measured?[url] else { return }
+        let url = Self.probeURL(mine.probe)
+        guard let reply = await vpn.send(.measure([url, Self.probeURL(Etha.probeBoxIP)])), let got = reply.measured, let ms = got[url] else { return }
         var m = exitMeasured; m[mine.code] = ms; exitMeasured = m; store.exitMeasured = m
-        judgeExit(m)
+        judgeExit(got)
     }
 
-    private func judgeExit(_ m: [String: Int64]) {
-        guard let mine = exits.first(where: { $0.code == exitShown }), mine.routed, let ms = m[mine.code] else { return }
+    static func probeURL(_ ip: String) -> String { "http://\(ip)\(Etha.exitProbePath)" }
+
+    /// The verdict on the chosen country from one batch of probes (url → ms): judged only when the line itself answered (the box's probe),
+    /// never while every line is dead or the subscription ended — those states have their own words.
+    private func judgeExit(_ got: [String: Int64]) {
+        guard let mine = exits.first(where: { $0.code == exitShown }), mine.routed, let ms = got[Self.probeURL(mine.probe)] else { return }
+        if searching || expired { exitFails = 0; return }
+        if let control = got[Self.probeURL(Etha.probeBoxIP)], control <= 0 { return }   // the line is dead, not the country: Auto is on it
         if ms <= 0 {
             exitFails += 1
             if exitFails >= 2, exitWaitUntil.map({ Date() > $0 }) ?? true { exitDown = true }
@@ -542,6 +570,7 @@ final class AppModel: ObservableObject {
         tunnel = nil
         phase = .idle
         searching = false; testing = false; latencyMs = 0; latencyAt = nil; outcomeKey = nil
+        exitDown = false; exitFails = 0; exitWaitUntil = nil; exitWatchedAt = nil
         reload()
         banner = BannerMessage(text: L("delete.done"), kind: .ok)
         AppLog.info("account deleted from this phone")

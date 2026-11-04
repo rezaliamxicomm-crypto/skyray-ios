@@ -34,6 +34,17 @@ struct SubscriptionImporter {
         return String(m.prefix(48))
     }
 
+    /// This phone's code for the box: the Keychain's, else the one made from the vendor identifier and kept from then on (DeviceCodeStore). Main thread.
+    static func phoneCode() -> String? {
+        DeviceCodeStore.code(fallback: DeviceCode.make(id: UIDevice.current.identifierForVendor?.uuidString, bundle: Bundle.main.bundleIdentifier ?? ""))
+    }
+
+    /// The OS version for X-Etha-OS, read without UIKit (the background fetch runs off the main thread).
+    static var osVersion: String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return v.patchVersion > 0 ? "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)" : "\(v.majorVersion).\(v.minorVersion)"
+    }
+
     static var userAgent: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
         return Etha.userAgent(version: version)
@@ -90,7 +101,7 @@ struct SubscriptionImporter {
         if let code = deviceCode { headers[Etha.deviceHeader] = code }   // this phone as a code, on every way of the fetch (2.1.2)
         if let want = store.exitWant { headers[Etha.exitSetHeader] = want }   // the Servers box (3.0.0): this phone's choice, until the box confirms it
         headers[Etha.modelHeader] = Self.deviceModel                           // the operator's device card: the phone's model and OS version
-        headers[Etha.osHeader] = "iOS " + UIDevice.current.systemVersion
+        headers[Etha.osHeader] = "iOS " + Self.osVersion
         let tunnelUp = NetworkInterfaces.tunnelIsUp()
         let network = Self.networkSignature()
         let known = EchFetch.parseHops(snapshot?.info.linkHops)
@@ -258,6 +269,8 @@ struct SubscriptionImporter {
 
     @discardableResult
     func fetchAndStore(link: String) async throws -> SubscriptionSnapshot {
+        if let stored = store.loadSnapshot()?.url, EthaLink.token(of: EthaLink.canonical(link)) != EthaLink.token(of: stored) { store.exitWant = nil; store.exitMeasured = [:] }   // another account starts at Auto (3.0.0)
+        let carried = store.exitWant   // the pending choice this fetch carries: its answer settles it, confirmed or not
         let fetched: (info: SubscriptionInfo, links: [String])
         do {
             fetched = try await fetch(link)
@@ -271,7 +284,7 @@ struct SubscriptionImporter {
         let name = EthaLink.name(of: link)
         let snapshot = SubscriptionSnapshot(url: EthaLink.canonical(link), name: name, fetchedAt: Date(), info: info, lines: lines)
         store.saveSnapshot(snapshot)
-        if let want = store.exitWant, want == "auto" ? (info.exit ?? "").isEmpty : info.exit == want { store.exitWant = nil }   // the box confirmed the choice (3.0.0)
+        if let carried = carried, store.exitWant == carried { store.exitWant = nil }   // the fetch that carried the choice is answered: the box's word stands, confirmed or not (3.0.0)
         // the running tunnel holds the set it started with: a different set has to reach it (AppModel sends .reload)
         let fingerprint = LineReport.fingerprint(lines)
         if let before = store.linesFingerprint, before != fingerprint { store.linesChanged = true }

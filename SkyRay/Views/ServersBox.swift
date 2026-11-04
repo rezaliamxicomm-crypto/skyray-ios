@@ -42,7 +42,7 @@ struct ServersSheet: View {
             ScrollView {
                 VStack(spacing: 10) {
                     row(nil)
-                    ForEach(model.exits.filter { $0.state != "off" }) { e in row(e) }
+                    ForEach(model.exitsOffered) { e in row(e) }
                     Button(model.isConnected ? L("server.switch") : L("server.connect")) {
                         let code = selected
                         dismiss()

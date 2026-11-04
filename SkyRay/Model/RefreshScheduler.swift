@@ -18,7 +18,8 @@ enum RefreshScheduler {
             let store = SkyRayStore.appGroup()
             var ok = false
             if store.loadSnapshot() != nil {
-                ok = (try? await SubscriptionImporter(store: store).refresh()) != nil
+                let code = await MainActor.run { SubscriptionImporter.phoneCode() }   // this phone's code on the background fetch too: without it the box hands the shared id and forgets the chosen country (3.0.0 audit)
+                ok = (try? await SubscriptionImporter(store: store, deviceCode: code).refresh()) != nil
             }
             if !ok { schedule(after: Etha.defaultUpdateMinutes) }
             task.setTaskCompleted(success: ok)

@@ -2606,6 +2606,29 @@
           }
         }
       }
+    },
+    "server.notapplied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not switch the server. Try again."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تغییر سرور انجام نشد. دوباره تلاش کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сменить сервер. Попробуйте ещё раз."
+          }
+        }
+      }
     }
   }
 }

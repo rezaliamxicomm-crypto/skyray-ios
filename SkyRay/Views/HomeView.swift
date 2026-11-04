@@ -40,19 +40,27 @@ struct HomeView: View {
     }
 }
 
-/// The update screen (3.0.0): the box's X-Etha-App-Min is above this build — one way out, the App Store. Over the Home screen until the
-/// version is right; the alert comes back when dismissed.
+/// The update screen (3.0.0): the box's X-Etha-App-Min is above this build — one way out, the App Store. A gate: it comes back when the
+/// app returns from the store without the update, and it waits while the Servers sheet or the device-limit alert is up (one presentation at a time).
 private struct UpdateGate: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var shown = false
     var body: some View {
         Color.clear
             .alert(isPresented: $shown) {
                 Alert(title: Text(L("update.title")), message: Text(L("update.text")),
-                      dismissButton: .default(Text(L("update.now"))) { if let u = URL(string: Etha.appStoreURL) { UIApplication.shared.open(u) } })
+                      dismissButton: .default(Text(L("update.now"))) {
+                          if let u = URL(string: Etha.appStoreURL) { UIApplication.shared.open(u) }
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { rearm() }
+                      })
             }
-            .onAppear { shown = model.updateDue }
-            .onChange(of: model.updateDue) { shown = $0 }
+            .onAppear { rearm() }
+            .onChange(of: model.updateDue) { _ in rearm() }
+            .onChange(of: model.showServers) { _ in rearm() }
+            .onChange(of: model.devicesLimit) { _ in rearm() }
+            .onChange(of: scenePhase) { if $0 == .active { rearm() } }
             .allowsHitTesting(false)
     }
+    private func rearm() { if model.updateDue, !model.showServers, model.devicesLimit == nil { shown = true } }
 }

@@ -9,20 +9,29 @@ enum DeviceCodeStore {
     private static let service = "com.allion.skyray.device"
     private static let account = "code"
 
-    /// The kept code, else `fallback` stored and returned; nil when there is nothing to store.
+    /// The kept code; else `fallback` stored and returned (nil when there is nothing to store). When the Keychain does not answer (before the
+    /// first unlock, a transient error) nothing is written and this run uses the fallback — the upgrade's code is the same value anyway.
     static func code(fallback: String?) -> String? {
-        if let kept = read(), !kept.isEmpty { return kept }
-        guard let fresh = fallback, !fresh.isEmpty else { return nil }
-        write(fresh)
-        return fresh
+        switch read() {
+        case .found(let kept): return kept
+        case .missing:
+            guard let fresh = fallback, !fresh.isEmpty else { return nil }
+            write(fresh)
+            return fresh
+        case .unavailable: return fallback
+        }
     }
 
-    private static func read() -> String? {
+    private enum Read { case found(String), missing, unavailable }
+
+    private static func read() -> Read {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
                                     kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var out: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        if status == errSecItemNotFound { return .missing }
+        guard status == errSecSuccess, let data = out as? Data, let kept = String(data: data, encoding: .utf8), !kept.isEmpty else { return .unavailable }
+        return .found(kept)
     }
 
     private static func write(_ value: String) {
