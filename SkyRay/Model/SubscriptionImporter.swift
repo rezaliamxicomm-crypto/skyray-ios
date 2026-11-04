@@ -2,6 +2,7 @@ import Foundation
 import CryptoKit
 import SkyRayCore
 import SkyRayXray
+import UIKit
 
 /// Fetches the customer's link, reads the headers, turns every vless line into an Xray outbound (libXray,
 /// in this process) and writes the snapshot the tunnel reads.
@@ -23,6 +24,14 @@ struct SubscriptionImporter {
         case emptyBody
         case noLines
         case http(Int)
+        case devices(limit: Int, active: Int)   // the device limit's signed 403 (3.0.0): this subscription is on more phones than allowed
+    }
+
+    /// The phone's model for the operator's device card (X-Etha-Model): the machine name, nothing that names the person.
+    static var deviceModel: String {
+        var s = utsname(); uname(&s)
+        let m = withUnsafePointer(to: &s.machine) { $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) } }
+        return String(m.prefix(48))
     }
 
     static var userAgent: String {
@@ -79,6 +88,9 @@ struct SubscriptionImporter {
         let report = store.tunnelState.lineReport ?? ""
         var headers: [String: String] = report.isEmpty ? [:] : [Etha.linesHeader: report]
         if let code = deviceCode { headers[Etha.deviceHeader] = code }   // this phone as a code, on every way of the fetch (2.1.2)
+        if let want = store.exitWant { headers[Etha.exitSetHeader] = want }   // the Servers box (3.0.0): this phone's choice, until the box confirms it
+        headers[Etha.modelHeader] = Self.deviceModel                           // the operator's device card: the phone's model and OS version
+        headers[Etha.osHeader] = "iOS " + UIDevice.current.systemVersion
         let tunnelUp = NetworkInterfaces.tunnelIsUp()
         let network = Self.networkSignature()
         let known = EchFetch.parseHops(snapshot?.info.linkHops)
@@ -124,7 +136,9 @@ struct SubscriptionImporter {
     private static func read(status: Int, headers: [String: String], body: Data) throws -> (info: SubscriptionInfo, links: [String]) {
         switch status {
         case 200: break
-        case 403: throw FetchError.expired
+        case 403:
+            if let d = Exits.devicesRefusal(String(decoding: body, as: UTF8.self)) { throw FetchError.devices(limit: d.limit, active: d.active) }   // the device limit (3.0.0)
+            throw FetchError.expired
         case 404: throw FetchError.unknownLink
         default: throw FetchError.http(status)
         }
@@ -257,6 +271,7 @@ struct SubscriptionImporter {
         let name = EthaLink.name(of: link)
         let snapshot = SubscriptionSnapshot(url: EthaLink.canonical(link), name: name, fetchedAt: Date(), info: info, lines: lines)
         store.saveSnapshot(snapshot)
+        if let want = store.exitWant, want == "auto" ? (info.exit ?? "").isEmpty : info.exit == want { store.exitWant = nil }   // the box confirmed the choice (3.0.0)
         // the running tunnel holds the set it started with: a different set has to reach it (AppModel sends .reload)
         let fingerprint = LineReport.fingerprint(lines)
         if let before = store.linesFingerprint, before != fingerprint { store.linesChanged = true }
@@ -286,6 +301,7 @@ struct SubscriptionImporter {
     func message(for error: Error) -> String {
         switch error as? FetchError {
         case .expired: return L("sub.expired")
+        case .devices: return L("devices.title")
         case .unknownLink: return L("link.notvalid")
         case .emptyBody, .noLines: return L("sub.empty")
         default: return L("net.unreachable")

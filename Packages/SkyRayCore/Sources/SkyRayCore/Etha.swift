@@ -62,6 +62,15 @@ public enum Etha {
     public static let probeFallbackURL = "https://www.gstatic.com/generate_204"
     /// What Auto measured, sent on the next subscription fetch as this header (LineReport); the box stores it.
     public static let linesHeader = "X-Etha-Lines"
+    /// The Servers box (3.0.0, Exits): the countries the box offers and where this phone leaves; the sheet's probes.
+    public static let exitsHeader = "x-etha-exits"            // code|name|country|state|rtt|probe;… (signed like every x-etha-* header)
+    public static let exitHeader = "x-etha-exit"              // the box's word of this phone's choice ("" = Auto)
+    public static let exitSetHeader = "X-Etha-Exit-Set"       // this phone's choice on the next fetch (a code, or "auto"); the box renames the phone's user
+    public static let appMinHeader = "x-etha-app-min"         // android=3.0.0;ios=3.0.0: below it the update screen
+    public static let modelHeader = "X-Etha-Model"            // the phone's model and OS version for the operator's device card (never an id)
+    public static let osHeader = "X-Etha-OS"
+    public static let probeBoxIP = "203.0.113.3"              // the box itself among the sheet's probes (an exit's is its own address, routed to its card)
+    public static let exitProbePath = "/exit"                 // a country's probe: HEAD http://<probe>/exit through the line in use — no fallback, a dead card fails
     public static let deviceHeader = "X-Etha-Device"             // this phone as a code on every fetch of our link (DeviceCode: a hash, never the id); the box counts the phones a link is on (2.1.2)
     public static let pullURL = "http://203.0.113.1/blob/256k"   // the pull (2.1.2): a Range of the box's blob through one line, the bytes counted — the second opinion a HEAD cannot give
     /// The hop starts this long after the two ECH ways on a fetch — at once on a network where it answered last time.

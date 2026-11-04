@@ -112,6 +112,10 @@ public enum SubscriptionHeaders {
         if let raw = headers[Etha.autoHeader] {
             let t = raw.trimmingCharacters(in: .whitespaces); info.autoPolicy = t.isEmpty ? nil : t; seen = true
         }
+        // the Servers box (3.0.0): the countries, the box's word of this phone's choice, the lowest app version — none kept when absent
+        if let raw = headers[Etha.exitsHeader] { info.exits = Exits.parse(raw).isEmpty ? nil : raw.trimmingCharacters(in: .whitespaces); seen = true } else { info.exits = nil }
+        if let raw = headers[Etha.exitHeader] { let t = raw.trimmingCharacters(in: .whitespaces); info.exit = t.isEmpty ? nil : t; seen = true } else { info.exit = nil }
+        if let raw = headers[Etha.appMinHeader] { let t = raw.trimmingCharacters(in: .whitespaces); info.appMin = t.isEmpty ? nil : t; seen = true }
         if seen { info.infoUpdated = now }
         return seen
     }

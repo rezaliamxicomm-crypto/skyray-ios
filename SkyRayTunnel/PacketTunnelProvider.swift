@@ -322,6 +322,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             case "expired":    // the box said the subscription ended (2.1.2): nothing to look for until the link answers again
                 self.engine?.onExpired()
                 answer()
+            case "measure":    // the Servers sheet (3.0.0): each address measured through the line in use (its probe inbound), one at a time, off this queue
+                let urls = request.urls ?? []
+                let port = (self.engine?.current ?? self.active?.id).flatMap { self.probePorts[$0] }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var out: [String: Int64] = [:]
+                    if let port = port { for u in urls { out[u] = Probe(port: port, timeoutMs: 4_000).measureLine(url: u) } }
+                    self.queue.async {
+                        var reply = self.statusReply()
+                        reply.measured = out
+                        completionHandler?(try? JSONEncoder().encode(reply))
+                    }
+                }
             case "logTail":
                 var reply = self.statusReply()
                 reply.log = self.log.tail(lines: request.lines ?? 200)

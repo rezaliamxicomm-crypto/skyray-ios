@@ -15,6 +15,9 @@ public struct SubscriptionInfo: Codable, Equatable {
     public var autoPolicy: String?         // the service's last X-Etha-Auto: Auto's numbers over AutoPolicy's defaults
     public var hint: String?               // the service's last X-Etha-Hint: the box's ranking of the lines on this network (Hint), advice for Auto
     public var signedAt: Int64?            // X-Etha-Sig-At of the last answer: the time the box signed it (the replay rule)
+    public var exits: String?              // the service's last X-Etha-Exits: the countries on offer (Exits, the Servers box, 3.0.0)
+    public var exit: String?               // the service's last X-Etha-Exit: the box's word of this phone's choice ("" = Auto)
+    public var appMin: String?             // the service's last X-Etha-App-Min: the lowest app version per platform (the update screen)
     public var infoUpdated: Date?
     public init() {}
 }

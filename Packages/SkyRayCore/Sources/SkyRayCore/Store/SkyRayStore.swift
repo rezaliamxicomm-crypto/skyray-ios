@@ -53,7 +53,7 @@ public final class SkyRayStore {
     public func updateTunnelState(_ change: (inout TunnelState) -> Void) { var s = tunnelState; change(&s); tunnelState = s }
 
     // MARK: small flags
-    private struct Flags: Codable { var deletedLink: String?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt?; var fetchWays: [String: String]?; var linesFingerprint: String?; var linesChanged: Bool?; var lastSignedAt: Int64? }
+    private struct Flags: Codable { var deletedLink: String?; var exitWant: String?; var exitMs: [String: Int64]?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt?; var fetchWays: [String: String]?; var linesFingerprint: String?; var linesChanged: Bool?; var lastSignedAt: Int64? }
     private var flags: Flags { get { read("flags.json", as: Flags.self) ?? Flags() } set { write(newValue, "flags.json") } }
     public var deletedLink: String? { get { flags.deletedLink } set { var f = flags; f.deletedLink = newValue; flags = f } }
     public var declarationAccepted: Bool { get { flags.declarationAccepted ?? false } set { var f = flags; f.declarationAccepted = newValue; flags = f } }
@@ -71,6 +71,9 @@ public final class SkyRayStore {
     public var linesChanged: Bool { get { flags.linesChanged ?? false } set { var f = flags; f.linesChanged = newValue; flags = f } }
     /// The signed time of the last subscription answer taken (SubscriptionImporter: an older one is never taken again).
     public var lastSignedAt: Int64? { get { flags.lastSignedAt } set { var f = flags; f.lastSignedAt = newValue; flags = f } }
+    /// The Servers box (3.0.0): a choice the box has not confirmed yet ("auto" for none), and the countries' last measured latencies.
+    public var exitWant: String? { get { flags.exitWant } set { var f = flags; f.exitWant = newValue; flags = f } }
+    public var exitMeasured: [String: Int64] { get { flags.exitMs ?? [:] } set { var f = flags; f.exitMs = newValue; flags = f } }
 
     // MARK: Auto's memory of the lines, per network (LineHealth; the extension writes it, "Delete account" removes it)
     private var lineHealthAll: [String: LineHealth] { read("line-health.json", as: [String: LineHealth].self) ?? [:] }
@@ -82,6 +85,6 @@ public final class SkyRayStore {
     public func wipe(rememberingDeletedLink link: String?) {
         remove("snapshot.json"); remove("selection.json"); remove("tunnel-state.json"); remove("line-health.json")
         for name in ["app.log", "tunnel.log", "xray.log"] { try? FileManager.default.removeItem(at: logsDir.appendingPathComponent(name)) }
-        var f = flags; f.deletedLink = link; f.lastRefreshAttempt = nil; f.linesFingerprint = nil; f.linesChanged = nil; f.lastSignedAt = nil; flags = f
+        var f = flags; f.deletedLink = link; f.lastRefreshAttempt = nil; f.linesFingerprint = nil; f.linesChanged = nil; f.lastSignedAt = nil; f.exitWant = nil; f.exitMs = nil; flags = f
     }
 }
