@@ -271,6 +271,7 @@ struct SubscriptionImporter {
     func fetchAndStore(link: String) async throws -> SubscriptionSnapshot {
         if let stored = store.loadSnapshot()?.url, EthaLink.token(of: EthaLink.canonical(link)) != EthaLink.token(of: stored) { store.exitWant = nil; store.exitMeasured = [:] }   // another account starts at Auto (3.0.0)
         let carried = store.exitWant   // the pending choice this fetch carries: its answer settles it, confirmed or not
+        let held = store.loadSnapshot()   // what the phone held before this answer: its link and the box's last word of its country (3.0.1)
         let fetched: (info: SubscriptionInfo, links: [String])
         do {
             fetched = try await fetch(link)
@@ -288,6 +289,10 @@ struct SubscriptionImporter {
         // the running tunnel holds the set it started with: a different set has to reach it (AppModel sends .reload)
         let fingerprint = LineReport.fingerprint(lines)
         if let before = store.linesFingerprint, before != fingerprint { store.linesChanged = true }
+        // 3.0.1: the box moved this phone to another country — its own choice, the panel, or back to Auto when a country was turned off.
+        // What is open stays on the country it was opened through (a page reloaded on its kept connection showed the old country's
+        // address for as long as that connection lived): the tunnel reloads as it does for other lines, and everything is dialled again.
+        if let held = held, EthaLink.token(of: held.url) == EthaLink.token(of: snapshot.url), Exits.moved(from: held.info.exit, to: info.exit) { store.linesChanged = true }
         store.linesFingerprint = fingerprint
         store.updateSelection { selection in
             let ids = Set(lines.map { $0.id })

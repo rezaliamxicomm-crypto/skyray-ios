@@ -363,7 +363,7 @@ final class AppModel: ObservableObject {
         if store.linesChanged {
             store.linesChanged = false
             if vpn.isActive {
-                AppLog.info("the fetch brought other lines: the tunnel reloads")
+                AppLog.info("the fetch brought other lines or another country: the tunnel reloads")
                 _ = await vpn.send(.reload)
                 await pollStatus()
             }
@@ -383,7 +383,8 @@ final class AppModel: ObservableObject {
     // MARK: the Servers box (3.0.0)
 
     /// The customer's choice: kept until the box confirms it on the next fetch (X-Etha-Exit-Set → X-Etha-Exit). The fetch goes now: the box renames
-    /// this phone's user and new connections take the country — no reconnect; not connected, Connect follows.
+    /// this phone's user and new connections take the country; what is already open stays on the old one, so the answer that confirms another
+    /// country reloads the tunnel (3.0.1: SubscriptionImporter sets linesChanged, afterFetch sends .reload). Not connected, Connect follows.
     func chooseExit(_ code: String) async {
         store.exitWant = code.isEmpty ? "auto" : code
         exitDown = false; exitFails = 0; exitWaitUntil = nil; exitWatchedAt = nil

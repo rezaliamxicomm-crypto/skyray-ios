@@ -45,6 +45,12 @@ public enum Exits {
         return String(c.unicodeScalars.compactMap { Unicode.Scalar(0x1F1E6 + $0.value - 65) }.map { Character($0) })
     }
 
+    /// The box's word of this phone's country changed between two answers ("" or nil = Auto). A connection that is open stays on the
+    /// country it was opened through, so the running tunnel reloads when this says true (3.0.1) — everything is dialled again.
+    public static func moved(from before: String?, to mine: String?) -> Bool {
+        (before ?? "").trimmingCharacters(in: .whitespaces) != (mine ?? "").trimmingCharacters(in: .whitespaces)
+    }
+
     /// `android=3.0.0;ios=3.0.0` → this platform's lowest version, nil when none.
     public static func minVersion(_ raw: String?, platform: String = "ios") -> String? {
         guard let raw = raw else { return nil }

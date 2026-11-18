@@ -24,6 +24,12 @@ final class ExitsTests: XCTestCase {
         XCTAssertTrue(Exits.isBelow("3.0", min: "3.0.1"))
     }
 
+    func testAnotherCountryReloadsTheTunnelAndTheSameOneDoesNot() {
+        XCTAssertTrue(Exits.moved(from: "ca", to: "us")); XCTAssertTrue(Exits.moved(from: "", to: "ca")); XCTAssertTrue(Exits.moved(from: "us", to: nil))   // a country, another, back to Auto
+        XCTAssertFalse(Exits.moved(from: "us", to: "us")); XCTAssertFalse(Exits.moved(from: nil, to: "")); XCTAssertFalse(Exits.moved(from: "", to: nil))   // the same word: nothing to reload for
+        XCTAssertFalse(Exits.moved(from: " us", to: "us ")); XCTAssertTrue(Exits.moved(from: nil, to: "ca"))
+    }
+
     func testTheDeviceLimitsRefusal() {
         let d = Exits.devicesRefusal("{\"detail\":\"devices\",\"limit\":2,\"active\":3}")
         XCTAssertEqual(d?.limit, 2); XCTAssertEqual(d?.active, 3)
