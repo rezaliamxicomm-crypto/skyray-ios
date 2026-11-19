@@ -31,6 +31,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private lazy var log = RingLog(url: store.tunnelLogURL)
     private let queue = DispatchQueue(label: "com.allion.skyray.tunnel")
     private let hev = HevTunnel()
+    private let hevLock = NSLock()                // the four below: read on hev's own thread when it ends, written on `queue`
+    private var hevRunning = false
+    private var hevStopOrdered = false            // our own stop for a change of country (3.0.2): its end is no failure
+    private var hevEnded = false                  // …and it has ended: whoever sees this first starts it again
+    private var hevWaiter: DispatchSemaphore?     // reloadLines waiting for that end
     private var tunFD: Int32 = -1
     private var socksPort = Etha.socksPortFallback
     private var apiPort = Etha.apiPortFallback
@@ -44,7 +49,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var stopping = false
     private var memoryTicks = 0
     private var lastGuardAt = Date.distantPast
-    /// iOS kills the extension at about 50 MiB; Xray restarted in place (hev stays, apps reconnect) costs a second.
+    /// iOS kills the extension at about 50 MiB; Xray restarted in place (hev stays) costs a second.
     private let guardMB = 46.5
 
     // MARK: lifecycle
@@ -94,7 +99,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.engine?.stop(); self.engine = nil
             self.memoryTimer?.cancel(); self.memoryTimer = nil
             self.pathMonitor?.cancel(); self.pathMonitor = nil
-            self.hev.stop()
+            self.hevLock.lock(); let hevUp = self.hevRunning; self.hevLock.unlock()
+            if hevUp { self.hev.stop() }      // hev's quit waits for ever when hev has already ended (its event fds are closed)
             try? LibXrayBridge.stopXray()
             self.active = nil
             self.store.updateTunnelState { $0.activeLineId = nil; $0.startedAt = nil; $0.searching = nil; $0.outage = nil; $0.latencyMs = nil }
@@ -154,17 +160,53 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         throw TunnelError.balancer("\(lastError.map { "\($0)" } ?? "?")")
     }
 
-    /// hev-socks5-tunnel on the utun fd; its exit for any reason other than our stop takes the tunnel down.
+    /// hev-socks5-tunnel on the utun fd; its exit for any reason other than our stop takes the tunnel down. A stop of ours for a
+    /// change of country (stopHevForCut) is followed by a new start on the same fd: hev does not close a fd it was given.
     private func startHev() {
         let config = HevTunnel.config(mtu: Etha.tunnelMTU, ipv4: Etha.tunnelIPv4, ipv6: Etha.tunnelIPv6, socksPort: socksPort)
+        hevLock.lock(); hevRunning = true; hevEnded = false; hevLock.unlock()
         hev.start(config: config, tunFD: tunFD) { [weak self] code in
             guard let self = self else { return }
+            self.hevLock.lock()
+            self.hevRunning = false
+            let ours = self.hevStopOrdered, waiter = self.hevWaiter
+            if ours { self.hevStopOrdered = false; self.hevEnded = true }
+            self.hevLock.unlock()
+            if ours {
+                if let waiter = waiter { waiter.signal(); return }      // reloadLines starts it again
+                self.queue.async {                                       // it ended after reloadLines had stopped waiting: started again here
+                    self.hevLock.lock(); let pending = self.hevEnded; self.hevEnded = false; self.hevLock.unlock()
+                    guard pending, !self.stopping else { return }
+                    self.log.warn("hev ended late after a stop of ours: started again")
+                    self.startHev()
+                }
+                return
+            }
             self.queue.async {
                 guard !self.stopping else { return }
                 self.log.error("hev-socks5-tunnel exited (\(code))")
                 self.cancelTunnelWithError(TunnelError.hevExited(code))
             }
         }
+    }
+
+    /// hev stopped for a change of country, and its end awaited: it terminates every session it carries, so every connection an
+    /// app holds through the tunnel is dropped and its SOCKS connection to Xray with it. → true when it has ended and the caller
+    /// starts it again; false when it was not running, or has not ended in five seconds (then its own end starts it again).
+    private func stopHevForCut() -> Bool {
+        let waiter = DispatchSemaphore(value: 0)
+        hevLock.lock()
+        guard hevRunning else { hevLock.unlock(); return false }
+        hevStopOrdered = true; hevEnded = false; hevWaiter = waiter
+        hevLock.unlock()
+        hev.stop()
+        _ = waiter.wait(timeout: .now() + 5)
+        hevLock.lock()
+        let ended = hevEnded
+        hevWaiter = nil
+        if ended { hevEnded = false }
+        hevLock.unlock()
+        return ended
     }
 
     private func startEngine(on line: Line, policy: AutoPolicy, hint: Hint?) {
@@ -192,10 +234,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    /// The app fetched the subscription again and the lines changed: Xray restarts in place on the new set (hev stays,
-    /// apps reconnect), the engine with it — the line in use kept when it is still there, else the first. The SOCKS and
-    /// API ports stay (hev is bound to the first); a new line gets a probe port of its own.
-    private func reloadLines() {
+    /// The app fetched the subscription again and the lines changed: Xray restarts in place on the new set, the engine with
+    /// it — the line in use kept when it is still there, else the first. The SOCKS and API ports stay (hev is bound to the
+    /// first); a new line gets a probe port of its own. hev stays, and so does what the apps hold open: Xray's stop closes
+    /// its listeners and lets the connections it carries run on, each through the outbound connection it already has.
+    /// `cut` (3.0.2, another country): hev is stopped first and started again after — it terminates every session, so
+    /// nothing open survives, and what the apps dial again leaves from the country the box has just moved this phone to.
+    private func reloadLines(cut: Bool = false) {
         guard let snapshot = store.loadSnapshot(), !snapshot.lines.isEmpty else { log.warn("reload: no subscription"); return }
         let fresh = snapshot.lines.sorted { $0.order < $1.order }
         let keep = fresh.first { $0.id == engine?.current } ?? fresh.first { $0.id == active?.id } ?? fresh[0]
@@ -207,6 +252,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             for (line, port) in zip(missing, ports) { probePorts[line.id] = port }
         }
         reasserting = true
+        let hevDown = cut ? stopHevForCut() : false
         try? LibXrayBridge.stopXray()
         do {
             try startXray(on: keep)
@@ -216,13 +262,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             cancelTunnelWithError(error)
             return
         }
+        if hevDown { startHev() }
         reasserting = false
         store.updateTunnelState { $0.results = nil; $0.lastRoundAt = nil; $0.searching = nil; $0.expired = nil }
         startEngine(on: keep, policy: AutoPolicy.parse(snapshot.info.autoPolicy), hint: Hint.parse(snapshot.info.hint))
-        log.info("reload: xray restarted on \(fresh.count) lines, on \(keep.remark)")
+        log.info("reload: xray restarted on \(fresh.count) lines, on \(keep.remark)" + (cut ? (hevDown ? "; hev restarted: what was open is dropped" : "; hev was not restarted here (not running, or slow to end)") : ""))
     }
 
-    /// The memory guard: Xray restarted in place on the line in use (hev stays, apps reconnect), the balancer held again.
+    /// The memory guard: Xray restarted in place on the line in use, the balancer held again (hev stays; what is open runs on
+    /// through the stopped instance's own connections until it closes — see reloadLines).
     private func restartXrayInPlace() {
         guard let line = lines.first(where: { $0.id == engine?.current }) ?? active else { return }
         reasserting = true
@@ -315,6 +363,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
             case "reload":
                 self.reloadLines()
+                answer()
+            case "reloadCut":   // another country (3.0.2): what the apps hold open is dropped with the reload
+                self.reloadLines(cut: true)
                 answer()
             case "fetched":    // our link answered (2.1.2): the fresh advice is read, a line the box calls dead is checked with a pull
                 self.engine?.onFetched()

@@ -2,7 +2,7 @@ import Foundation
 
 /// App → tunnel requests (sendProviderMessage) and the tunnel's replies, as JSON.
 public struct TunnelRequest: Codable, Equatable {
-    public var cmd: String            // status | probe | ping | reload | logTail | fetched | expired (switch: an older app's pick, ignored since 2.0.0)
+    public var cmd: String            // status | probe | ping | reload | reloadCut | logTail | fetched | expired (switch: an older app's pick, ignored since 2.0.0)
     public var lineId: String?
     public var lines: Int?
     public var urls: [String]?        // measure: the countries' probes (3.0.0)
@@ -17,6 +17,10 @@ public struct TunnelRequest: Codable, Equatable {
     public static func logTail(_ n: Int) -> TunnelRequest { TunnelRequest(cmd: "logTail", lines: n) }
     /// The subscription on disk changed (a fetch brought other lines): Xray restarts on them, the engine with it.
     public static let reload = TunnelRequest(cmd: "reload")
+    /// The box moved this phone to another country (3.0.2): as `reload`, and every connection the apps hold through the tunnel is
+    /// dropped first — hev stopped and started again on the same utun. Xray's own restart leaves what is open running on the
+    /// connection it has, which the box pinned to the old country; what is dialled again leaves from the new one.
+    public static let reloadCut = TunnelRequest(cmd: "reloadCut")
     /// The Servers sheet (3.0.0): these addresses measured through the line in use, a HEAD each; the reply's `measured` holds url → ms (-1 failed).
     public static func measure(_ urls: [String]) -> TunnelRequest { TunnelRequest(cmd: "measure", urls: urls) }
 }

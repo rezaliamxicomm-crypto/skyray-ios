@@ -96,13 +96,13 @@ struct SubscriptionImporter {
         guard URL(string: url) != nil else { throw FetchError.unknownLink }
         let snapshot = store.loadSnapshot()
         let stored = EchFetch.storedAddresses(lines: snapshot?.lines ?? [], selectedLineId: store.selection.selectedLineId)
-        let report = store.tunnelState.lineReport ?? ""
+        let tunnelUp = NetworkInterfaces.tunnelIsUp()
+        let report = LineReport.withVpn(store.tunnelState.lineReport ?? "", vpnUp: tunnelUp)   // 3.0.2: with whether the VPN is on at this fetch
         var headers: [String: String] = report.isEmpty ? [:] : [Etha.linesHeader: report]
         if let code = deviceCode { headers[Etha.deviceHeader] = code }   // this phone as a code, on every way of the fetch (2.1.2)
         if let want = store.exitWant { headers[Etha.exitSetHeader] = want }   // the Servers box (3.0.0): this phone's choice, until the box confirms it
         headers[Etha.modelHeader] = Self.deviceModel                           // the operator's device card: the phone's model and OS version
         headers[Etha.osHeader] = "iOS " + Self.osVersion
-        let tunnelUp = NetworkInterfaces.tunnelIsUp()
         let network = Self.networkSignature()
         let known = EchFetch.parseHops(snapshot?.info.linkHops)
         let ways = Self.ways(url: url, token: EthaLink.token(of: url), stored: stored, hops: known.isEmpty ? Etha.linkHops : known,
@@ -291,8 +291,9 @@ struct SubscriptionImporter {
         if let before = store.linesFingerprint, before != fingerprint { store.linesChanged = true }
         // 3.0.1: the box moved this phone to another country — its own choice, the panel, or back to Auto when a country was turned off.
         // What is open stays on the country it was opened through (a page reloaded on its kept connection showed the old country's
-        // address for as long as that connection lived): the tunnel reloads as it does for other lines, and everything is dialled again.
-        if let held = held, EthaLink.token(of: held.url) == EthaLink.token(of: snapshot.url), Exits.moved(from: held.info.exit, to: info.exit) { store.linesChanged = true }
+        // address for as long as that connection lived). 3.0.2: the tunnel is told to drop what is open (exitMoved → .reloadCut) —
+        // 3.0.1's plain reload restarted Xray alone, which lets open connections run on, and changed nothing.
+        if let held = held, EthaLink.token(of: held.url) == EthaLink.token(of: snapshot.url), Exits.moved(from: held.info.exit, to: info.exit) { store.linesChanged = true; store.exitMoved = true }
         store.linesFingerprint = fingerprint
         store.updateSelection { selection in
             let ids = Set(lines.map { $0.id })

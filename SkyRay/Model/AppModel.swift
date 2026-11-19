@@ -362,9 +362,11 @@ final class AppModel: ObservableObject {
         reload()
         if store.linesChanged {
             store.linesChanged = false
+            let moved = store.exitMoved      // another country (3.0.2): what the apps hold open is dropped, or it stays on the old one
+            store.exitMoved = false
             if vpn.isActive {
-                AppLog.info("the fetch brought other lines or another country: the tunnel reloads")
-                _ = await vpn.send(.reload)
+                AppLog.info(moved ? "the fetch brought another country: the tunnel drops what is open and reloads" : "the fetch brought other lines: the tunnel reloads")
+                _ = await vpn.send(moved ? .reloadCut : .reload)
                 await pollStatus()
             }
         }
@@ -384,7 +386,7 @@ final class AppModel: ObservableObject {
 
     /// The customer's choice: kept until the box confirms it on the next fetch (X-Etha-Exit-Set → X-Etha-Exit). The fetch goes now: the box renames
     /// this phone's user and new connections take the country; what is already open stays on the old one, so the answer that confirms another
-    /// country reloads the tunnel (3.0.1: SubscriptionImporter sets linesChanged, afterFetch sends .reload). Not connected, Connect follows.
+    /// country makes the tunnel drop what is open (3.0.2: SubscriptionImporter sets exitMoved, afterFetch sends .reloadCut). Not connected, Connect follows.
     func chooseExit(_ code: String) async {
         store.exitWant = code.isEmpty ? "auto" : code
         exitDown = false; exitFails = 0; exitWaitUntil = nil; exitWatchedAt = nil

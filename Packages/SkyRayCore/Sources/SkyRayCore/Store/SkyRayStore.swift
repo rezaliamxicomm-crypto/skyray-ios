@@ -53,7 +53,7 @@ public final class SkyRayStore {
     public func updateTunnelState(_ change: (inout TunnelState) -> Void) { var s = tunnelState; change(&s); tunnelState = s }
 
     // MARK: small flags
-    private struct Flags: Codable { var deletedLink: String?; var exitWant: String?; var exitMs: [String: Int64]?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt?; var fetchWays: [String: String]?; var linesFingerprint: String?; var linesChanged: Bool?; var lastSignedAt: Int64? }
+    private struct Flags: Codable { var deletedLink: String?; var exitWant: String?; var exitMs: [String: Int64]?; var declarationAccepted: Bool?; var lastRefreshAttempt: Date?; var oldAppImportTried: Bool?; var rate: RatePrompt?; var fetchWays: [String: String]?; var linesFingerprint: String?; var linesChanged: Bool?; var exitMoved: Bool?; var lastSignedAt: Int64? }
     private var flags: Flags { get { read("flags.json", as: Flags.self) ?? Flags() } set { write(newValue, "flags.json") } }
     public var deletedLink: String? { get { flags.deletedLink } set { var f = flags; f.deletedLink = newValue; flags = f } }
     public var declarationAccepted: Bool { get { flags.declarationAccepted ?? false } set { var f = flags; f.declarationAccepted = newValue; flags = f } }
@@ -69,6 +69,8 @@ public final class SkyRayStore {
     /// The fingerprint of the stored lines (LineReport.fingerprint) and whether the last fetch changed it (the running tunnel must reload).
     public var linesFingerprint: String? { get { flags.linesFingerprint } set { var f = flags; f.linesFingerprint = newValue; flags = f } }
     public var linesChanged: Bool { get { flags.linesChanged ?? false } set { var f = flags; f.linesChanged = newValue; flags = f } }
+    /// The last fetch brought another country than the stored one (3.0.2): the running tunnel must drop what is open, not only reload.
+    public var exitMoved: Bool { get { flags.exitMoved ?? false } set { var f = flags; f.exitMoved = newValue; flags = f } }
     /// The signed time of the last subscription answer taken (SubscriptionImporter: an older one is never taken again).
     public var lastSignedAt: Int64? { get { flags.lastSignedAt } set { var f = flags; f.lastSignedAt = newValue; flags = f } }
     /// The Servers box (3.0.0): a choice the box has not confirmed yet ("auto" for none), and the countries' last measured latencies.
@@ -85,6 +87,6 @@ public final class SkyRayStore {
     public func wipe(rememberingDeletedLink link: String?) {
         remove("snapshot.json"); remove("selection.json"); remove("tunnel-state.json"); remove("line-health.json")
         for name in ["app.log", "tunnel.log", "xray.log"] { try? FileManager.default.removeItem(at: logsDir.appendingPathComponent(name)) }
-        var f = flags; f.deletedLink = link; f.lastRefreshAttempt = nil; f.linesFingerprint = nil; f.linesChanged = nil; f.lastSignedAt = nil; f.exitWant = nil; f.exitMs = nil; flags = f
+        var f = flags; f.deletedLink = link; f.lastRefreshAttempt = nil; f.linesFingerprint = nil; f.linesChanged = nil; f.exitMoved = nil; f.lastSignedAt = nil; f.exitWant = nil; f.exitMs = nil; flags = f
     }
 }

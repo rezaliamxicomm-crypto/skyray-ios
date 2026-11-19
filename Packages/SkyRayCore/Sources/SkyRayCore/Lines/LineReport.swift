@@ -77,6 +77,11 @@ public enum LineReport {
         return "v=1;t=\(Int64(now.timeIntervalSince1970));trig=\(trigger);use=\(use);sw=\(switched ? 1 : 0)\(rate);l=\(items.joined(separator: ","))\(c)\(p)"
     }
 
+    /// The report as the fetch sends it (3.0.2): with whether the VPN is up at that moment — `;on=1` or `;on=0`. A report is the
+    /// tunnel's last word and rides on every fetch until a new one, also after the VPN was switched off: without this the box cannot
+    /// tell a phone that is cut from one that was put away. The box ignores a key it does not know. Empty stays empty.
+    public static func withVpn(_ report: String, vpnUp: Bool) -> String { report.isEmpty ? "" : report + ";on=" + (vpnUp ? "1" : "0") }
+
     /// One text for a set of lines: the same set → the same text, whatever their ids (the line's link without its name)
     /// and whatever Cloudflare's ECH configuration of the hour — the `ech=` value and the `echConfigList` inside an XHTTP
     /// line's `extra=` (its download leg) are left out, or every refresh after Cloudflare rotates it (about hourly)

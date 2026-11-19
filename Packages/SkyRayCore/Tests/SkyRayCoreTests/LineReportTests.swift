@@ -93,4 +93,13 @@ final class LineReportTests: XCTestCase {
             colds: ["EthaVPN-REALITY-relay-FRA4-443": 540, "EthaVPN-XHTTP-www-CleanIP1-443": 900, "EthaVPN-WS-www-CleanIP1-443": -1])
         XCTAssertEqual(h, "v=1;t=1800000000;trig=manual;use=REALITY-relay-FRA4-443;sw=0;l=REALITY-relay-FRA4-443:200,WS-www-CleanIP1-443:-1;c=REALITY-relay-FRA4-443:540")
     }
+
+    /// 3.0.2: the fetch adds whether the VPN is up when it carries the report; nothing is added to no report.
+    func testTheFetchSaysWhetherTheVpnIsOn() {
+        let report = "v=1;t=1800000000;trig=search;use=REALITY-relay-FRA4-443;sw=0;l=REALITY-relay-FRA4-443:-1"
+        XCTAssertEqual(LineReport.withVpn(report, vpnUp: true), report + ";on=1")
+        XCTAssertEqual(LineReport.withVpn(report, vpnUp: false), report + ";on=0")
+        XCTAssertEqual(LineReport.withVpn("", vpnUp: true), "")
+        XCTAssertEqual(LineReport.withVpn("", vpnUp: false), "")
+    }
 }

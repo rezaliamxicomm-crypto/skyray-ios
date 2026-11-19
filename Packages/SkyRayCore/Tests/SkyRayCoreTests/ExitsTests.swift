@@ -30,6 +30,24 @@ final class ExitsTests: XCTestCase {
         XCTAssertFalse(Exits.moved(from: " us", to: "us ")); XCTAssertTrue(Exits.moved(from: nil, to: "ca"))
     }
 
+    /// 3.0.2: another country is its own word to the tunnel — `reload` restarts Xray alone, and Xray's stop lets what is open run on
+    /// (3.0.1 changed nothing for a page on a kept connection); `reloadCut` drops what is open first. The flag that carries it from
+    /// the fetch to the order is kept like `linesChanged` and goes with the subscription.
+    func testAnotherCountryIsItsOwnOrderToTheTunnelAndItsFlagIsKept() throws {
+        XCTAssertEqual(TunnelRequest.reloadCut.cmd, "reloadCut"); XCTAssertEqual(TunnelRequest.reload.cmd, "reload"); XCTAssertNotEqual(TunnelRequest.reloadCut, TunnelRequest.reload)
+        let wire = try JSONEncoder().encode(TunnelRequest.reloadCut)
+        XCTAssertEqual(try JSONDecoder().decode(TunnelRequest.self, from: wire), TunnelRequest.reloadCut)
+        let store = SkyRayStore(root: FileManager.default.temporaryDirectory.appendingPathComponent("skyray-exit-\(UUID().uuidString)"))
+        XCTAssertFalse(store.exitMoved)
+        store.linesChanged = true; store.exitMoved = true
+        XCTAssertTrue(store.exitMoved); XCTAssertTrue(store.linesChanged)
+        store.exitMoved = false
+        XCTAssertFalse(store.exitMoved); XCTAssertTrue(store.linesChanged)      // the two are read and cleared one by one
+        store.exitMoved = true
+        store.wipe(rememberingDeletedLink: nil)
+        XCTAssertFalse(store.exitMoved); XCTAssertFalse(store.linesChanged)
+    }
+
     func testTheDeviceLimitsRefusal() {
         let d = Exits.devicesRefusal("{\"detail\":\"devices\",\"limit\":2,\"active\":3}")
         XCTAssertEqual(d?.limit, 2); XCTAssertEqual(d?.active, 3)
